@@ -266,7 +266,19 @@ public class EvChargingService {
     public double calculateChargingFee(ParkingTicket ticket, ParkingSlot slot, com.smartparking.model.vehicle.Vehicle vehicle) {
         if (ticket == null || slot == null || vehicle == null) return 0.0;
         if (!isEvVehicle(vehicle.getType()) || slot.getSlotType() != SlotType.ELECTRIC) return 0.0;
-        return ticket.getEvChargingFee();
+
+        // Only bill charging the driver asked for at the entry gate
+        boolean requested = (vehicle instanceof com.smartparking.model.vehicle.ElectricCar ec && ec.isChargingRequested())
+                || (vehicle instanceof com.smartparking.model.vehicle.EvTwoWheeler tw && tw.isChargingRequested());
+        if (!requested) return 0.0;
+
+        // Previously this returned ticket.getEvChargingFee() (always 0), so requested charging was never billed.
+        // Bill the bay's charging rate per started hour of stay, minimum one hour once charging was requested.
+        double ratePerHour = (slot instanceof com.smartparking.model.slot.ElectricSlot es)
+                ? es.getChargingRatePerHour() : 0.0;
+        long minutes = ticket.getDurationInMinutes();
+        long hours = Math.max(1, (minutes + 59) / 60);
+        return Math.round(ratePerHour * hours * 100.0) / 100.0;
     }
 
     /**

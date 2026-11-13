@@ -61,7 +61,7 @@ class VisualVerificationTest {
         panel.paint(g2);
         g2.dispose();
 
-        File out = new File("C:/Users/ASUS/.gemini/antigravity/brain/a49c29eb-c3cc-4450-ad53-e1d96e1c8b1b/dashboard_rendered.png");
+        File out = new File(System.getProperty("java.io.tmpdir"), "dashboard_rendered.png");
         ImageIO.write(img, "png", out);
         assertTrue(out.exists(), "dashboard_rendered.png must be saved successfully");
     }
@@ -80,7 +80,7 @@ class VisualVerificationTest {
         panel.paint(g2);
         g2.dispose();
 
-        File out = new File("C:/Users/ASUS/.gemini/antigravity/brain/a49c29eb-c3cc-4450-ad53-e1d96e1c8b1b/floormap_rendered.png");
+        File out = new File(System.getProperty("java.io.tmpdir"), "floormap_rendered.png");
         ImageIO.write(img, "png", out);
         assertTrue(out.exists(), "floormap_rendered.png must be saved successfully");
     }
