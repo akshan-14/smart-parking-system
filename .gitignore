@@ -1,0 +1,35 @@
+# Target build directory
+target/
+*.class
+
+# Package files
+*.jar
+*.war
+*.ear
+
+# Log files
+*.log
+
+# SQLite database files and runtime state
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+test_*.db
+
+# IDE and Editor configurations
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Scratch / temporary files
+*.tmp
+phase6_prompt.txt

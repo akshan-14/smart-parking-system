@@ -1,0 +1,44 @@
+@startuml State_ParkingSlot
+skinparam state {
+    BackgroundColor LightSteelBlue
+    BorderColor DarkSlateBlue
+    ArrowColor Navy
+}
+
+title Parking Slot Lifecycle - State Pattern Transition Diagram
+
+[*] --> AvailableState : Initialized
+
+state AvailableState {
+    AvailableState : isAvailable() = true
+    AvailableState : currentVehicle = null
+}
+
+state OccupiedState {
+    OccupiedState : isAvailable() = false
+    OccupiedState : currentVehicle != null
+}
+
+state ReservedState {
+    ReservedState : isAvailable() = false
+    ReservedState : advance booking held
+}
+
+state OutOfServiceState {
+    OutOfServiceState : isAvailable() = false
+    OutOfServiceState : under maintenance
+}
+
+AvailableState --> OccupiedState : occupy(vehicle) [vehicle fits]
+AvailableState --> ReservedState : reserve()
+AvailableState --> OutOfServiceState : markOutOfService()
+
+OccupiedState --> AvailableState : vacate() [fee paid]
+
+ReservedState --> OccupiedState : occupy(vehicle) [reservation check-in]
+ReservedState --> AvailableState : vacate() [cancelled / expired]
+ReservedState --> OutOfServiceState : markOutOfService()
+
+OutOfServiceState --> AvailableState : vacate() / restoreToService()
+
+@enduml

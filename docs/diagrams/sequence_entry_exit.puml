@@ -1,0 +1,82 @@
+@startuml Sequence_Entry_Exit
+autonumber
+actor Customer as User
+boundary "Console / Entry Kiosk" as UI
+control "ParkingService" as Service
+entity "SlotAllocationStrategy" as Strategy
+entity "ParkingSlot" as Slot
+entity "SlotState" as State
+entity "ParkingTicket" as Ticket
+database "SQLite Database (DAO)" as DB
+collections "ParkingEventManager" as Observers
+
+== Vehicle Entry Workflow ==
+User -> UI : Arrive with Vehicle (e.g. KA-01-AB-1234)
+UI -> Service : processVehicleEntry(vehicle)
+activate Service
+Service -> DB : findActiveByPlate(licensePlate)
+DB --> Service : Optional.empty (no active ticket)
+
+Service -> Strategy : allocateSlot(floors, vehicle)
+activate Strategy
+Strategy --> Service : Selected ParkingSlot (e.g. F1-S01)
+deactivate Strategy
+
+Service -> Slot : occupy(vehicle)
+activate Slot
+Slot -> State : occupy(slot, vehicle)
+activate State
+State -> Slot : setCurrentVehicle(vehicle)
+State -> Slot : setCurrentState(OccupiedState)
+deactivate State
+deactivate Slot
+
+Service -> DB : updateSlotStatus("F1-S01", "OCCUPIED")
+Service -> Ticket ** : create(licensePlate, vehicleType, slotId)
+Service -> DB : saveTicket(ticket)
+DB --> Service : ticketId
+
+Service -> Observers : notifyVehicleEntry(ticket, slot)
+Observers -> Observers : updateDisplayBoard() & sendSmsEmail()
+
+Service --> UI : ParkingTicket (TKT-XXXX)
+deactivate Service
+UI --> User : Print Ticket & Open Gate
+
+== Vehicle Exit & Payment Workflow ==
+User -> UI : Present TicketNumber & select PaymentMethod
+UI -> Service : processVehicleExit(ticketNumber, methodType)
+activate Service
+
+Service -> DB : findByTicketNumber(ticketNumber)
+DB --> Service : ticket
+
+Service -> Service : Calculate Duration & Dynamic Price
+Service -> "PaymentService" as Payment : processTicketPayment(ticketId, amount, method)
+activate Payment
+Payment -> "PaymentStrategy" as PStrategy : processPayment(amount, ref)
+activate PStrategy
+PStrategy --> Payment : true (Success)
+deactivate PStrategy
+Payment -> DB : savePaymentTransaction(payment)
+Payment --> Service : PaymentTransaction
+deactivate Payment
+
+Service -> Ticket : markPaid() & markExited()
+Service -> DB : updateTicket(ticket)
+
+Service -> Slot : vacate()
+activate Slot
+Slot -> State : vacate(slot)
+activate State
+State -> Slot : setCurrentVehicle(null)
+State -> Slot : setCurrentState(AvailableState)
+deactivate State
+deactivate Slot
+
+Service -> DB : updateSlotStatus("F1-S01", "AVAILABLE")
+Service -> Observers : notifyVehicleExit(ticket, slot)
+Service --> UI : Final Receipt with Total Amount
+deactivate Service
+UI --> User : Dispense Receipt & Open Exit Gate
+@enduml

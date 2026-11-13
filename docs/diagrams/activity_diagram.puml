@@ -1,0 +1,119 @@
+@startuml SmartParking_ActivityDiagram
+skinparam monochrome false
+skinparam shadowing false
+skinparam conditionStyle diamond
+
+title Smart Parking Management System - Vehicle Entry & Exit Activity Diagram
+
+|Customer / Sensor Gate|
+start
+:Vehicle arrives at Entry Gate;
+:Scan license plate / Read RFID;
+
+|Parking Management System|
+if (Vehicle already recorded inside?) then (yes)
+  :Display "Vehicle Already Inside" Error;
+  stop
+else (no)
+endif
+
+if (Has Active Advance Reservation?) then (yes)
+  :Retrieve Reserved Slot ID;
+  :Mark Reservation CHECKED_IN;
+else (no)
+  :Query Available Slots across Floors;
+  :Execute Slot Allocation Strategy\n(NearestFirst / BestFit / Random);
+  if (Compatible Slot Found?) then (yes)
+    :Select Best Compatible Slot;
+  else (no)
+    :Display "Parking Full" Error;
+    stop
+  endif
+endif
+
+if (Is EV and Charging Requested?) then (yes)
+  :Activate EV Charging Station on Slot;
+else (no)
+endif
+
+:State Transition: Slot -> OCCUPIED;
+:Build Parking Ticket using TicketBuilder;
+:Save Ticket to SQLite Database;
+
+fork
+  :Update LED Display Board (Observer);
+fork again
+  :Send Email Confirmation (Observer);
+fork again
+  :Send SMS Notification (Observer);
+end fork
+
+|Customer / Sensor Gate|
+:Gate Opens; Driver Parks;
+... Vehicle stays in parking lot ...
+:Vehicle arrives at Exit Gate;
+:Present Ticket Number or License Plate;
+
+|Parking Management System|
+if (Ticket is Lost?) then (yes)
+  :Lookup Ticket by License Plate;
+  :Assess Lost Ticket Penalty ($50.00);
+  :Attach Penalty to Ticket via Composition;
+else (no)
+endif
+
+:Calculate Duration (exit_time - entry_time);
+:Compute Dynamic Base Parking Fee\n(Standard / Peak Surge / Weekend);
+
+if (Has Active Monthly Membership Pass?) then (yes)
+  :Apply Membership Tier Discount (10% - 35%);
+else (no)
+endif
+
+if (EV Charged at Station?) then (yes)
+  :Compute EV Energy Consumption & Service Fee;
+  :Add EV Fee to Total;
+else (no)
+endif
+
+if (Stay Exceeds 24 Hours?) then (yes)
+  :Assess Overstay Penalty ($25.00/day);
+  :Add Overstay Fee to Total;
+else (no)
+endif
+
+:Compute Final Total Amount;
+
+|Customer / Sensor Gate|
+:Select Payment Method\n(Cash / Card / UPI / Digital Wallet);
+
+|Parking Management System|
+:Execute Payment via Strategy Pattern;
+if (Payment Succeeded?) then (yes)
+  partition "Atomic Database Transaction" {
+    :Record Payment Transaction in DB;
+    :Update Ticket (PAID, EXITED, Exit Timestamp);
+    :Update Slot (AVAILABLE, Clear Plate);
+    :Commit Transaction;
+  }
+  :State Transition: In-Memory Slot -> AVAILABLE;
+  :Generate Itemized Receipt using ReceiptBuilder;
+  
+  fork
+    :Update LED Display Board Count (Observer);
+  fork again
+    :Send Exit Receipt via SMS/Email (Observer);
+  end fork
+  
+  |Customer / Sensor Gate|
+  :Issue Printed/Digital Itemized Receipt;
+  :Raise Exit Barrier;
+  :Vehicle departs facility;
+  stop
+else (no)
+  :Rollback Transaction;
+  :Display "Payment Failed - Retry";
+  detach
+endif
+
+@enduml

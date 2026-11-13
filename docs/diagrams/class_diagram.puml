@@ -1,0 +1,269 @@
+@startuml SmartParking_ClassDiagram
+skinparam classAttributeIconSize 0
+skinparam monochrome false
+skinparam shadowing false
+skinparam packageStyle rectangle
+
+title Smart Parking Management System - Comprehensive Class Diagram (OOM)
+
+package "com.smartparking.model.enums" {
+    enum VehicleType {
+        BIKE
+        CAR
+        TRUCK
+        ELECTRIC_CAR
+    }
+    enum SlotType {
+        COMPACT
+        REGULAR
+        LARGE
+        ELECTRIC
+        HANDICAPPED
+    }
+    enum TicketStatus {
+        ACTIVE
+        PAID
+        EXITED
+        LOST
+    }
+    enum PaymentStatus {
+        PENDING
+        COMPLETED
+        FAILED
+        REFUNDED
+    }
+    enum PaymentMethodType {
+        CASH
+        CARD
+        UPI
+        WALLET
+    }
+    enum MembershipType {
+        SILVER
+        GOLD
+        PLATINUM
+    }
+    enum UserRole {
+        ADMIN
+        ATTENDANT
+        CUSTOMER
+    }
+}
+
+package "com.smartparking.model.vehicle" {
+    abstract class Vehicle {
+        -licensePlate : String
+        -type : VehicleType
+        -color : String
+        -brand : String
+        +Vehicle(licensePlate, type, color, brand)
+        +Vehicle(licensePlate, type)
+        +{abstract} canFitIn(slotType : SlotType) : boolean
+        +getLicensePlate() : String
+        +getType() : VehicleType
+    }
+    class Bike {
+        +canFitIn(SlotType) : boolean
+    }
+    class Car {
+        +canFitIn(SlotType) : boolean
+    }
+    class Truck {
+        +canFitIn(SlotType) : boolean
+    }
+    class ElectricCar {
+        -batteryCapacityKWh : double
+        -currentChargePercentage : double
+        -isChargingRequested : boolean
+        +canFitIn(SlotType) : boolean
+    }
+    Vehicle <|-- Bike
+    Vehicle <|-- Car
+    Vehicle <|-- Truck
+    Vehicle <|-- ElectricCar
+}
+
+package "com.smartparking.model.slot" {
+    interface SlotState {
+        +occupy(slot : ParkingSlot, vehicle : Vehicle) : void
+        +vacate(slot : ParkingSlot) : void
+        +reserve(slot : ParkingSlot) : void
+        +markOutOfService(slot : ParkingSlot) : void
+        +getStatusName() : String
+        +isAvailable() : boolean
+    }
+    class AvailableState implements SlotState
+    class OccupiedState implements SlotState
+    class ReservedState implements SlotState
+    class OutOfServiceState implements SlotState
+
+    abstract class ParkingSlot {
+        -slotId : String
+        -floorNumber : int
+        -slotNumber : String
+        -slotType : SlotType
+        -hourlyRate : double
+        -currentState : SlotState
+        -currentVehicle : Vehicle
+        +ParkingSlot(slotId, floor, num, type, rate)
+        +{abstract} canAccommodate(vehicle : Vehicle) : boolean
+        +occupy(vehicle : Vehicle) : void
+        +vacate() : void
+        +reserve() : void
+        +markOutOfService() : void
+        +isAvailable() : boolean
+    }
+    ParkingSlot o-- SlotState : State Pattern
+
+    class CompactSlot extends ParkingSlot
+    class RegularSlot extends ParkingSlot
+    class LargeSlot extends ParkingSlot
+    class ElectricSlot extends ParkingSlot {
+        -chargingRatePerHour : double
+        -isChargerActive : boolean
+    }
+    class HandicappedSlot extends ParkingSlot
+}
+
+package "com.smartparking.model.parking" {
+    class ParkingFloor {
+        -floorNumber : int
+        -floorName : String
+        -slots : Map<String, ParkingSlot>
+        +addSlot(slot : ParkingSlot) : void
+        +getAvailableSlots() : List<ParkingSlot>
+    }
+    class ParkingLot {
+        -lotId : String
+        -name : String
+        -address : String
+        -floors : List<ParkingFloor>
+        -attendants : List<Attendant>
+        +addFloor(floor : ParkingFloor) : void
+        +getOccupancyPercentage() : double
+    }
+    ParkingLot *-- ParkingFloor : Composition
+    ParkingFloor *-- ParkingSlot : Composition
+}
+
+package "com.smartparking.model.ticket" {
+    class Penalty {
+        -penaltyId : int
+        -ticketId : int
+        -type : PenaltyType
+        -amount : double
+        -reason : String
+    }
+    class ParkingTicket {
+        -ticketId : int
+        -ticketNumber : String
+        -licensePlate : String
+        -slotId : String
+        -entryTime : LocalDateTime
+        -exitTime : LocalDateTime
+        -status : TicketStatus
+        -baseFee : double
+        -penaltyFee : double
+        -evChargingFee : double
+        -totalAmount : double
+        -penalties : List<Penalty>
+        +addPenalty(penalty : Penalty) : void
+        +recalculateTotal() : void
+    }
+    ParkingTicket *-- Penalty : Composition
+}
+
+package "com.smartparking.model.user" {
+    abstract class User {
+        -userId : int
+        -username : String
+        -passwordHash : String
+        -role : UserRole
+        +{abstract} hasPermission(permission : String) : boolean
+    }
+    class Admin extends User
+    class Attendant extends User
+    class Customer extends User
+    ParkingLot o-- Attendant : Aggregation
+}
+
+    interface SlotAllocationStrategy {
+        +allocateSlot(floors : List<ParkingFloor>, vehicle : Vehicle) : Optional<ParkingSlot>
+    }
+    class NearestFirstAllocationStrategy implements SlotAllocationStrategy
+    class BestFitAllocationStrategy implements SlotAllocationStrategy
+    class RandomAllocationStrategy implements SlotAllocationStrategy
+
+    interface PricingStrategy {
+        +calculatePrice(ticket : ParkingTicket, rate : double, occupancy : double) : double
+    }
+    class StandardHourlyPricingStrategy implements PricingStrategy
+    class PeakHourPricingStrategy implements PricingStrategy
+    class WeekendPricingStrategy implements PricingStrategy
+
+    interface PaymentStrategy {
+        +processPayment(amount : double, ref : String) : boolean
+    }
+    class CashPaymentStrategy implements PaymentStrategy
+    class CardPaymentStrategy implements PaymentStrategy
+    class UpiPaymentStrategy implements PaymentStrategy
+    class WalletPaymentStrategy implements PaymentStrategy
+}
+
+package "com.smartparking.patterns.builder" {
+    class TicketBuilder {
+        -ticketId : int
+        -ticketNumber : String
+        -licensePlate : String
+        -vehicleType : VehicleType
+        -slotId : String
+        -floorNumber : int
+        -entryTime : LocalDateTime
+        -status : TicketStatus
+        -penalties : List<Penalty>
+        +{static} newInstance() : TicketBuilder
+        +setLicensePlate(plate : String) : TicketBuilder
+        +setVehicleType(type : VehicleType) : TicketBuilder
+        +setSlotId(slotId : String) : TicketBuilder
+        +setFloorNumber(floor : int) : TicketBuilder
+        +build() : ParkingTicket
+    }
+
+    class ReceiptBuilder {
+        -facilityName : String
+        -ticketNumber : String
+        -licensePlate : String
+        -slotLocation : String
+        -baseFee : double
+        -evChargingFee : double
+        -penaltyDetails : List<String>
+        -discountAmount : double
+        -totalAmount : double
+        -transactionRef : String
+        +{static} newInstance() : ReceiptBuilder
+        +setFacilityName(name : String) : ReceiptBuilder
+        +setTicket(ticket : ParkingTicket) : ReceiptBuilder
+        +setPaymentTransaction(txn : PaymentTransaction) : ReceiptBuilder
+        +setMembershipDiscount(amt : double, tier : String) : ReceiptBuilder
+        +build() : String
+    }
+    TicketBuilder ..> com.smartparking.model.ticket.ParkingTicket : Creates
+}
+
+package "com.smartparking.patterns.observer" {
+    interface ParkingEventListener {
+        +onVehicleEntry(ticket : ParkingTicket, slot : ParkingSlot) : void
+        +onVehicleExit(ticket : ParkingTicket, slot : ParkingSlot) : void
+    }
+    class ParkingEventManager {
+        +subscribe(listener : ParkingEventListener) : void
+        +notifyVehicleEntry(ticket, slot) : void
+        +notifyVehicleExit(ticket, slot) : void
+    }
+    class DisplayBoardListener implements ParkingEventListener
+    class EmailNotificationListener implements ParkingEventListener
+    class SmsNotificationListener implements ParkingEventListener
+    ParkingEventManager o-- ParkingEventListener : Notifies
+}
+
+@enduml

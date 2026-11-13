@@ -1,0 +1,90 @@
+@startuml SmartParking_UseCaseDiagram
+skinparam actorStyle awesome
+skinparam packageStyle rectangle
+skinparam shadowing false
+
+title Smart Parking Management System - Use Case Diagram (18 Functional Requirements)
+
+actor "Customer / Driver" as Customer
+actor "Parking Attendant" as Attendant
+actor "System Administrator" as Admin
+actor "Automated IoT / Sensor System" as SensorSystem
+
+Attendant <|-- Admin
+
+rectangle "Smart Parking Management System" {
+    package "Core Parking Gate Operations" {
+        usecase "UC-01: Vehicle Entry & Registration" as UC_Entry
+        usecase "UC-02: Automatic Slot Allocation\n(Nearest, Best-Fit, Random)" as UC_Allocate
+        usecase "UC-03: Generate Parking Ticket\n(TicketBuilder)" as UC_Ticket
+        usecase "UC-04: Vehicle Exit Processing" as UC_Exit
+        usecase "UC-05: Dynamic Fee Calculation\n(Peak/Weekend/Standard)" as UC_DynamicPricing
+        usecase "UC-06: Multi-Channel Payment\n(Cash, Card, UPI, Wallet)" as UC_Payment
+        usecase "UC-07: Issue Itemized Receipt\n(ReceiptBuilder)" as UC_Receipt
+        usecase "UC-08: Search Parked Vehicle" as UC_Search
+    }
+
+    package "Accessibility & EV Operations" {
+        usecase "UC-09: EV Charging & Fee Calculation" as UC_EV
+        usecase "UC-10: Handicapped Permit Verification" as UC_Handicapped
+    }
+
+    package "Reservations & Memberships" {
+        usecase "UC-11: Advance Slot Reservation" as UC_Reserve
+        usecase "UC-12: Auto-Purge Expired Reservations\n(No-show handling)" as UC_PurgeRes
+        usecase "UC-13: Purchase Monthly Membership Pass" as UC_BuyPass
+        usecase "UC-14: Apply Membership Discount" as UC_PassDiscount
+    }
+
+    package "Violations & Notifications" {
+        usecase "UC-15: Assess Penalties\n(Overstay / Lost Ticket)" as UC_Penalty
+        usecase "UC-16: Event Notifications\n(LED Board, Email, SMS)" as UC_Notify
+    }
+
+    package "Administration & Security" {
+        usecase "UC-17: Role-Based Authentication\n(Salted Hashing)" as UC_Auth
+        usecase "UC-18: Admin Dashboard & Reports\n(Occupancy, Revenue, Audits)" as UC_Report
+        usecase "UC-19: Multi-Floor & Slot Configuration" as UC_SlotConfig
+    }
+}
+
+' Customer interactions
+Customer --> UC_Entry
+Customer --> UC_Exit
+Customer --> UC_Search
+Customer --> UC_Reserve
+Customer --> UC_BuyPass
+Customer --> UC_Payment
+
+' System / IoT interactions
+SensorSystem --> UC_Notify
+SensorSystem --> UC_PurgeRes
+
+' Attendant interactions
+Attendant --> UC_Entry
+Attendant --> UC_Exit
+Attendant --> UC_Search
+Attendant --> UC_Penalty
+
+' Admin interactions
+Admin --> UC_Report
+Admin --> UC_SlotConfig
+Admin --> UC_Auth
+
+' Relationships
+UC_Entry ..> UC_Allocate : <<include>>
+UC_Entry ..> UC_Ticket : <<include>>
+UC_Entry ..> UC_Handicapped : <<include>>
+UC_Entry ..> UC_Notify : <<include>>
+UC_Entry <.. UC_EV : <<extend>>
+
+UC_Exit ..> UC_DynamicPricing : <<include>>
+UC_Exit ..> UC_Payment : <<include>>
+UC_Exit ..> UC_Receipt : <<include>>
+UC_Exit ..> UC_Notify : <<include>>
+UC_Exit <.. UC_Penalty : <<extend>>
+UC_Exit <.. UC_PassDiscount : <<extend>>
+
+UC_DynamicPricing ..> UC_PassDiscount : <<include>>
+
+@enduml
