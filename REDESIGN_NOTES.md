@@ -16,6 +16,7 @@ Business logic, services, DAOs, the SQLite schema, authentication and RBAC are u
 | **Advance booking** | Vertical booking form (no more overflowing toolbar), inline validation, end-time preview, bookings table with status pills, count, empty state, Extend/Cancel enabled only when a row is selected; cancel confirms. |
 | **Monthly passes** | Issue-a-pass card with price summary, check-a-pass card with structured result and status pill, pass-holder table with empty state. GST/payment dialog restyled. |
 | **Find vehicle** | Standard page header; full-width search bar. |
+| **Alerts** (new screen, admin + attendant) | The existing `AlertsPanel` was never reachable. It is now in the sidebar with severity/status filters, status pills, an empty state, and Acknowledge / Resolve / Show on floor map. Overstay alerts jump to the vehicle's bay. The anomaly scan runs at sign-in and every 5 minutes in the background. |
 | **Audit & reports** | Standard header, short tab names, period segmented control with a visible active state, 2×4 KPI grid, neutral revenue-by-method labels. |
 | **Security audit trail** | Standard header and secondary actions; **user / action / result / search filters are now on screen and wired** to the existing `AuditLogDao.findFiltered` (they were created but never shown); status pills; monospace hash column; pagination with icons. |
 | **Users & access** | Header actions (New user, Reset password, Activate/deactivate enabled on selection), status pills, **confirmation before deactivating** an account, toasts. |
@@ -69,11 +70,21 @@ Business logic, services, DAOs, the SQLite schema, authentication and RBAC are u
 6. **Floor map inspector showed fabricated values** ("10:30:00 (Today)", "45m 12s", invented plates) when no ticket was found. It now says so instead.
 7. **Fake telemetry removed from the floor map**: static CO-level/ventilation/sprinkler readings, the "mesh signal 99.8%" footer and the simulated CCTV panel.
 
-## 4. Pre-existing issues (not caused by the redesign)
+## 4. Audit fixes (second pass)
 
-- **Compile error in the original commit**: `NotificationService` called `ConsentService.hasConsent(int, String)`, which doesn't exist. Fixed with a one-line change to `hasValidConsent(String.valueOf(userId), "NOTIFICATIONS")`.
-- `VisualVerificationTest` (2 tests) writes PNGs to a hard-coded Windows path (`C:/Users/ASUS/.gemini/...`) and fails on any other machine. The panels render successfully before the write.
-- `ParkingServiceTest.testElectricCarCharging` expects a non-zero EV charging fee for a car that exits the instant it parks, so it fails without waiting.
+- **EV charging fee was never billed.** `EvChargingService.calculateChargingFee()` returned the ticket's current fee (always 0). It now bills the bay's `chargingRatePerHour` per started hour (minimum 1 h), only when an EV in an EV bay requested charging. This fixes `ParkingServiceTest.testElectricCarCharging`.
+- **`VisualVerificationTest`** wrote PNGs to a hard-coded Windows path; it now writes to the system temp directory.
+- **Alerts were never generated automatically.** `AlertService.runScheduledAnomalyCheck()` was never scheduled; the main window now runs it in the background.
+- **Avatar initials** showed "R(" for "Ramesh Kumar (Attendant)"; bracketed words are now ignored ("RK").
+- **Alerts "Acknowledged" pill** was light text on a bright yellow background; it now uses the theme's warning pill.
+- **`mvnw.cmd`** pointed at one developer's IntelliJ install path; it is now a shim that calls `mvn` from PATH. The README run commands were corrected: `exec:java` opens the GUI, and `--cli` opens the console.
+- Removed the dead `SlotVisualWidget` (only the old floor map used it).
+- **Compile error in the original commit**: `NotificationService` called a non-existent `ConsentService.hasConsent(int, String)`; it was fixed to `hasValidConsent(String.valueOf(userId), "NOTIFICATIONS")`.
+
+Known, deliberately unchanged:
+- `WeekendPricingStrategy` is a Strategy-pattern class that billing never selects (fees come from `TariffService` and the peak settings). Wiring it in would change prices.
+- Attendants can't open Monthly passes (RBAC grants no `VIEW_PASSES`). The README previously claimed they could; the docs now match the code.
+- Overstay thresholds differ: the dashboard flags overstays above 4 h, the alert scan above `alert.overstay_hours` (default 24 h).
 
 ## 5. Running
 

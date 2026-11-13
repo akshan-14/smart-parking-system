@@ -1,2 +1,3 @@
 @echo off
-"C:\Program Files\JetBrains\IntelliJ IDEA 2026.2.1\plugins\maven-plugin\lib\maven3\bin\mvn.cmd" %*
+rem Thin shim: delegates to the Maven installation on PATH (install Maven 3.8+ and run "mvn -version" to check).
+mvn %*

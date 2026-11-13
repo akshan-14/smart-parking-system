@@ -92,29 +92,38 @@ The **Smart Parking Management System** is a robust, modular, and enterprise-gra
 
 ### Requirements
 - **Java 17+**
-- **Maven** (A Maven wrapper `mvnw.cmd` is pre-configured in this repository)
+- **Maven 3.8+** on your `PATH` (`mvn -version` should work). `mvnw.cmd` is only a thin Windows shim that calls `mvn`.
 
-### Running Automated Demonstration
+### Running the Desktop GUI
+```bash
+mvn compile exec:java
+```
+Opens the login window. Demo accounts are listed below and are one click away on the login screen.
+
+### Running Automated Demonstration (console)
 Executes a complete simulated workflow demonstrating vehicle entry, allocation, EV charging, membership discount, surge pricing, penalties, checkout, and admin reports:
-```powershell
-.\mvnw.cmd compile exec:java "-Dexec.arguments=--demo"
+```bash
+mvn compile exec:java -Dexec.args="--demo"
 ```
 
 ### Running Interactive Console Application
-Launches the interactive menu where you can test manual entries, exits, role logins, and slot searches:
-```powershell
-.\mvnw.cmd compile exec:java
+Launches the interactive text menu (also used automatically on headless machines):
+```bash
+mvn compile exec:java -Dexec.args="--cli"
 ```
 
 ### Running JUnit 5 Test Suite
-```powershell
-.\mvnw.cmd test
+```bash
+mvn test
 ```
 
 ### Packaging Runnable JAR
-```powershell
-.\mvnw.cmd package
+```bash
+mvn package
+java -jar target/smart-parking-system-1.0.0-SNAPSHOT-jar-with-dependencies.jar
 ```
+
+The app creates `smart_parking.db` (SQLite) in the working directory on first launch and seeds demo data.
 
 ---
 
@@ -148,7 +157,7 @@ All real-world external hardware integrations and banking gateways are clearly d
 | Role | Username | Password | Notes |
 | :--- | :--- | :--- | :--- |
 | **Administrator** | `admin` | `Admin@123` | Full access; forced to change password upon first login; audit viewer & retention admin. |
-| **Attendant** | `attendant1` | `Attendant@123` | Operational access: Entry Gate, Checkout & Bill, Advance Booking, Memberships, Vehicle Search. |
+| **Attendant** | `attendant1` | `Attendant@123` | Operational access: Overview, Floor Map, Entry Gate, Checkout & Bill, Advance Booking, Vehicle Search, Alerts. |
 | **Customer** | `customer1` | `Customer@123` | Self-service portal: linked vehicles, personal tickets, passes, data download & DPDP erasure. |
 
 > **Password Security**: Passwords are cryptographically hashed using **BCrypt** (cost factor 12) via `jBCrypt`. Full card numbers and CVV codes are never stored or logged in accordance with PCI-DSS guidelines.
@@ -162,11 +171,13 @@ All real-world external hardware integrations and banking gateways are clearly d
 | **Vehicle Entry Gate** | ✅ | ✅ | ❌ |
 | **Checkout & Bill** | ✅ | ✅ | ❌ |
 | **Advance Booking** | ✅ | ✅ | ✅ (Own) |
-| **Monthly Passes** | ✅ | ✅ | ✅ (Own) |
+| **Monthly Passes** | ✅ | ❌ | ✅ (Own) |
 | **Find Vehicle** | ✅ | ✅ | ✅ (Own) |
+| **Operational Alerts (acknowledge / resolve)** | ✅ | ✅ | ❌ |
 | **Audit & Reports** | ✅ | ❌ | ❌ |
 | **Audit Log Viewer (Hash Verification)** | ✅ | ❌ | ❌ |
 | **User & Staff Management** | ✅ | ❌ | ❌ |
+| **System & Tariff Settings** | ✅ | ❌ | ❌ |
 | **Privacy Notice (EN / HI)** | ✅ | ✅ | ✅ |
 | **Customer Data Portal (DPDP)** | ❌ | ❌ | ✅ |
 | **Database Backup & Retention (Admin)** | ✅ | ❌ | ❌ |
