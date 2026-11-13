@@ -10,19 +10,23 @@ import com.smartparking.repository.PaymentDao;
 import com.smartparking.repository.ReservationDao;
 import com.smartparking.repository.TicketDao;
 import com.smartparking.service.ParkingService;
+import com.smartparking.ui.components.*;
+import com.smartparking.ui.theme.UITheme;
+import com.smartparking.ui.util.VectorIconUtil;
+import com.smartparking.ui.util.VectorIconUtil.IconType;
 import com.smartparking.util.DateFormat;
 import com.smartparking.util.MoneyFormat;
 import com.smartparking.util.PlateUtil;
 
 import javax.swing.*;
-import javax.swing.table.DefaultTableCellRenderer;
+import javax.swing.border.EmptyBorder;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.geom.Arc2D;
-import java.awt.geom.Line2D;
 import java.awt.geom.Path2D;
+import java.awt.geom.RoundRectangle2D;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -34,16 +38,22 @@ import java.util.Map;
 import java.util.function.Consumer;
 
 /**
- * Overview Home Dashboard:
- * - 6 Top KPI metric cards with 100% Vector Graphics (Total Capacity, Available Slots, Occupied Slots, Occupancy Rate, Today's Revenue, Reservations)
- * - Vehicle Turnover Trend bar/line chart with dynamic 7 Days / 30 Days / 3 Months / 1 Year filter tabs and real dates up to today (IST)
- * - Bottom 3-Column Split:
- *   1) Vehicle Type Distribution Donut Chart (exact count match to occupied slots)
- *   2) Recent Parking Activity Table with colored Action pills (Entry / Exit)
- *   3) Live Operational Alerts (clickable -> navigates & highlights slot on Floor Map) + 2x2 Quick Action Buttons (high contrast)
- * - Bottom Live Operational Status Footer
+ * Overview dashboard. Every number on this screen comes from a live SQLite query:
+ * <ul>
+ *   <li>KPI row — slot status counts, occupancy, today's revenue (vs. yesterday), today's entries/exits</li>
+ *   <li>Vehicle turnover — entries (bars) and exits (line) per day/week/month from ticket timestamps</li>
+ *   <li>Occupancy by level — per-floor stacked bars from slot statuses</li>
+ *   <li>Revenue — completed payments for each of the last 7 days (vs. previous 7)</li>
+ *   <li>Vehicle mix — vehicle types of currently active tickets</li>
+ *   <li>Alerts — overstays (&gt;4h), confirmed reservations, bays under maintenance</li>
+ *   <li>Recent activity — the 8 most recent tickets</li>
+ * </ul>
+ * When a dataset is empty the screen shows an explicit empty state rather than sample data.
  */
 public class DashboardPanel extends JPanel {
+
+    private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
+    private static final int OVERSTAY_HOURS = 4;
 
     private final ParkingLot parkingLot;
     private final ParkingService parkingService;
@@ -53,20 +63,25 @@ public class DashboardPanel extends JPanel {
     private final ReservationDao reservationDao;
     private final Consumer<String> navigationHandler;
 
-    // 6 KPI Cards
-    private KPICard totalCapacityCard;
-    private KPICard availableSlotsCard;
-    private KPICard occupiedSlotsCard;
-    private KPICard occupancyRateCard;
-    private KPICard revenueCard;
-    private KPICard reservationsCard;
+    // KPI cards
+    private MetricCard availableCard;
+    private MetricCard occupiedCard;
+    private MetricCard reservedCard;
+    private MetricCard occupancyCard;
+    private MetricCard revenueCard;
+    private MetricCard trafficCard;
 
-    // Chart & Table
-    private TurnoverTrendChartPanel turnoverChart;
-    private DonutChartPanel distributionChart;
-    private DefaultTableModel activityTableModel;
+    private PageHeader pageHeader;
+    private TurnoverChart turnoverChart;
+    private LevelOccupancy levelOccupancy;
+    private RevenueChart revenueChart;
+    private DonutChart donutChart;
     private JPanel alertsList;
-    private JLabel lastUpdatedLabel;
+    private JLabel alertsCount;
+    private DefaultTableModel activityTableModel;
+    private JPanel activityBody;
+    private JScrollPane activityScroll;
+    private EmptyState activityEmpty;
 
     public DashboardPanel(ParkingLot parkingLot, ParkingService parkingService, Consumer<String> navigationHandler) {
         this.parkingLot = parkingLot;
@@ -78,1063 +93,1085 @@ public class DashboardPanel extends JPanel {
         this.navigationHandler = navigationHandler;
 
         setLayout(new BorderLayout());
-        setBackground(new Color(238, 242, 249)); // #eef2f9
+        setBackground(UITheme.BG_CANVAS);
 
         initUI();
         refreshData();
     }
 
+    // =====================================================================================
+    // Layout
+    // =====================================================================================
     private void initUI() {
-        JPanel mainContent = new JPanel();
-        mainContent.setLayout(new BoxLayout(mainContent, BoxLayout.Y_AXIS));
-        mainContent.setBackground(new Color(238, 242, 249));
-        mainContent.setBorder(BorderFactory.createEmptyBorder(12, 16, 12, 16));
+        JPanel content = new ScrollablePanel(new GridBagLayout());
+        content.setBackground(UITheme.BG_CANVAS);
+        content.setBorder(new EmptyBorder(24, 28, 28, 28));
+        GridBagConstraints g = new GridBagConstraints();
+        g.gridx = 0;
+        g.weightx = 1;
+        g.fill = GridBagConstraints.BOTH;
 
-        // --- ROW 1: 6 KPI Cards Grid ---
-        JPanel kpiGrid = new JPanel(new GridLayout(1, 6, 12, 0));
-        kpiGrid.setOpaque(false);
-        kpiGrid.setMaximumSize(new Dimension(Integer.MAX_VALUE, 86));
-        kpiGrid.setPreferredSize(new Dimension(1100, 86));
+        // Header + quick actions
+        pageHeader = new PageHeader("Overview", "Live status across all levels");
+        ModernButton refresh = ModernButton.createGhost("Refresh", VectorIconUtil.getIcon(IconType.REFRESH, 14, UITheme.TEXT_SECONDARY));
+        refresh.setToolTipText("Reload all figures from the database");
+        refresh.addActionListener(e -> refreshData());
+        ModernButton reserve = ModernButton.createSecondary("Reserve bay", VectorIconUtil.getIcon(IconType.CALENDAR, 14, UITheme.TEXT_SECONDARY));
+        reserve.addActionListener(e -> navigationHandler.accept("RESERVATIONS"));
+        ModernButton checkout = ModernButton.createSecondary("Checkout", VectorIconUtil.getIcon(IconType.PAYMENT, 14, UITheme.TEXT_SECONDARY));
+        checkout.addActionListener(e -> navigationHandler.accept("EXIT"));
+        ModernButton entry = new ModernButton("New entry", VectorIconUtil.getIcon(IconType.PLUS, 14, Color.WHITE));
+        entry.addActionListener(e -> navigationHandler.accept("ENTRY"));
+        pageHeader.addAction(refresh).addAction(reserve).addAction(checkout).addAction(entry);
+        g.gridy = 0;
+        content.add(pageHeader, g);
 
-        totalCapacityCard = new KPICard(com.smartparking.ui.util.VectorIconUtil.IconType.GRID, new Color(219, 234, 254), new Color(29, 78, 216), "Total Capacity", "150", "Slots", new Color(29, 78, 216));
-        availableSlotsCard = new KPICard(com.smartparking.ui.util.VectorIconUtil.IconType.CHECK, new Color(220, 252, 231), new Color(22, 101, 52), "Available Slots", "106", "70.7%", new Color(22, 101, 52));
-        occupiedSlotsCard = new KPICard(com.smartparking.ui.util.VectorIconUtil.IconType.CAR, new Color(254, 226, 226), new Color(153, 27, 27), "Occupied Slots", "35", "23.3%", new Color(153, 27, 27));
-        occupancyRateCard = new KPICard(com.smartparking.ui.util.VectorIconUtil.IconType.DASHBOARD, new Color(255, 237, 213), new Color(154, 52, 18), "Occupancy Rate", "23.3%", "Normal Load", new Color(22, 101, 52));
-        revenueCard = new KPICard(com.smartparking.ui.util.VectorIconUtil.IconType.PAYMENT, new Color(254, 243, 199), new Color(146, 64, 14), "Today's Revenue", "\u20B91,580", "Today (IST)", new Color(22, 101, 52));
-        reservationsCard = new KPICard(com.smartparking.ui.util.VectorIconUtil.IconType.CLOCK, new Color(237, 233, 254), new Color(91, 33, 182), "Reservations", "6", "Active", new Color(91, 33, 182));
+        // KPI row
+        JPanel kpis = new JPanel(new GridLayout(1, 6, 12, 0));
+        kpis.setOpaque(false);
+        availableCard = new MetricCard("Available", "—", icon(IconType.CHECK, UITheme.SUCCESS_TEXT), UITheme.SUCCESS, "");
+        occupiedCard = new MetricCard("Occupied", "—", icon(IconType.CAR, UITheme.ERROR_TEXT), UITheme.ERROR, "");
+        reservedCard = new MetricCard("Reserved", "—", icon(IconType.CALENDAR, UITheme.WARNING_TEXT), UITheme.WARNING, "");
+        occupancyCard = new MetricCard("Occupancy", "—", icon(IconType.GRID, UITheme.ACCENT_TEXT), UITheme.ACCENT, "");
+        revenueCard = new MetricCard("Revenue today", "—", icon(IconType.PAYMENT, UITheme.SUCCESS_TEXT), UITheme.SUCCESS, "");
+        trafficCard = new MetricCard("Traffic today", "—", icon(IconType.TICKET, UITheme.SLOT_EV_TEXT), UITheme.SLOT_EV, "");
+        kpis.add(availableCard);
+        kpis.add(occupiedCard);
+        kpis.add(reservedCard);
+        kpis.add(occupancyCard);
+        kpis.add(revenueCard);
+        kpis.add(trafficCard);
+        g.gridy = 1;
+        g.insets = new Insets(0, 0, 16, 0);
+        content.add(kpis, g);
 
-        kpiGrid.add(totalCapacityCard);
-        kpiGrid.add(availableSlotsCard);
-        kpiGrid.add(occupiedSlotsCard);
-        kpiGrid.add(occupancyRateCard);
-        kpiGrid.add(revenueCard);
-        kpiGrid.add(reservationsCard);
+        // Row: turnover | occupancy by level
+        JPanel row2 = new JPanel(new GridBagLayout());
+        row2.setOpaque(false);
+        turnoverChart = new TurnoverChart();
+        levelOccupancy = new LevelOccupancy();
+        addWeighted(row2, cardWith("Vehicle turnover", "Entries and exits recorded at the gates", turnoverChart, turnoverChart.rangeControl()), 0, 2.0, 16);
+        addWeighted(row2, cardWith("Occupancy by level", "Live bay status per floor", levelOccupancy, null), 1, 1.0, 0);
+        row2.setPreferredSize(new Dimension(10, 318));
+        g.gridy = 2;
+        content.add(row2, g);
 
-        mainContent.add(kpiGrid);
-        mainContent.add(Box.createVerticalStrut(12));
+        // Row: revenue | vehicle mix | alerts
+        JPanel row3 = new JPanel(new GridBagLayout());
+        row3.setOpaque(false);
+        revenueChart = new RevenueChart();
+        donutChart = new DonutChart();
+        addWeighted(row3, cardWith("Revenue", "Completed payments, last 7 days", revenueChart, null), 0, 1.25, 16);
+        addWeighted(row3, cardWith("Vehicle mix", "Vehicles currently parked", donutChart, null), 1, 1.0, 16);
+        addWeighted(row3, buildAlertsCard(), 2, 1.0, 0);
+        row3.setPreferredSize(new Dimension(10, 300));
+        g.gridy = 3;
+        content.add(row3, g);
 
-        // --- ROW 2: Vehicle Turnover Trend Section ---
-        turnoverChart = new TurnoverTrendChartPanel(ticketDao);
-        turnoverChart.setMaximumSize(new Dimension(Integer.MAX_VALUE, 260));
-        turnoverChart.setPreferredSize(new Dimension(1100, 250));
-        mainContent.add(turnoverChart);
-        mainContent.add(Box.createVerticalStrut(12));
+        // Row: recent activity
+        g.gridy = 4;
+        g.insets = new Insets(0, 0, 0, 0);
+        content.add(buildActivityCard(), g);
 
-        // --- ROW 3: Bottom 3-Column Section (1fr : 1.5fr : 1fr) ---
-        JPanel bottomRow = new JPanel(new GridBagLayout());
-        bottomRow.setOpaque(false);
-        bottomRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 280));
-        bottomRow.setPreferredSize(new Dimension(1100, 270));
+        // filler
+        g.gridy = 5;
+        g.weighty = 1;
+        JPanel filler = new JPanel();
+        filler.setOpaque(false);
+        content.add(filler, g);
 
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.fill = GridBagConstraints.BOTH;
-        gbc.insets = new Insets(0, 0, 0, 12);
-        gbc.weighty = 1.0;
-
-        // Column 1: Vehicle Type Distribution (1.0 weight)
-        gbc.gridx = 0;
-        gbc.weightx = 1.0;
-        distributionChart = new DonutChartPanel();
-        bottomRow.add(distributionChart, gbc);
-
-        // Column 2: Recent Parking Activity Table (1.5 weight)
-        gbc.gridx = 1;
-        gbc.weightx = 1.5;
-        JPanel activityCard = buildRecentActivityCard();
-        bottomRow.add(activityCard, gbc);
-
-        // Column 3: Alerts & Quick Actions (1.0 weight)
-        gbc.gridx = 2;
-        gbc.weightx = 1.0;
-        gbc.insets = new Insets(0, 0, 0, 0);
-        JPanel rightCol = buildRightSideColumn();
-        bottomRow.add(rightCol, gbc);
-
-        mainContent.add(bottomRow);
-
-        JScrollPane scrollPane = new JScrollPane(mainContent);
-        scrollPane.setBorder(null);
-        scrollPane.setOpaque(false);
-        scrollPane.getViewport().setOpaque(false);
-        scrollPane.getVerticalScrollBar().setUnitIncrement(16);
-        add(scrollPane, BorderLayout.CENTER);
-
-        // --- BOTTOM: Persistent Status Footer ---
-        add(buildFooterBar(), BorderLayout.SOUTH);
+        JScrollPane scroll = new JScrollPane(content);
+        scroll.setBorder(null);
+        scroll.getViewport().setBackground(UITheme.BG_CANVAS);
+        scroll.getVerticalScrollBar().setUnitIncrement(18);
+        scroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        add(scroll, BorderLayout.CENTER);
     }
 
-    private JPanel buildRecentActivityCard() {
-        JPanel card = createWhiteCard();
-        card.setLayout(new BorderLayout(0, 8));
-        card.setBorder(BorderFactory.createEmptyBorder(12, 16, 12, 16));
+    private static Icon icon(IconType t, Color c) {
+        return VectorIconUtil.getIcon(t, 15, c);
+    }
 
-        // Header
+    private static void addWeighted(JPanel row, JComponent c, int x, double weight, int gap) {
+        GridBagConstraints g = new GridBagConstraints();
+        g.gridx = x;
+        g.gridy = 0;
+        g.weightx = weight;
+        g.weighty = 1;
+        g.fill = GridBagConstraints.BOTH;
+        g.insets = new Insets(0, 0, 16, gap);
+        row.add(c, g);
+    }
+
+    /** Card with title, caption, optional header control and body. */
+    private static RoundedPanel cardWith(String title, String caption, JComponent body, JComponent headerControl) {
+        RoundedPanel card = RoundedPanel.card(18);
+        card.setLayout(new BorderLayout(0, 14));
+        JPanel header = new JPanel(new BorderLayout(12, 0));
+        header.setOpaque(false);
+        JPanel titles = new JPanel();
+        titles.setOpaque(false);
+        titles.setLayout(new BoxLayout(titles, BoxLayout.Y_AXIS));
+        titles.add(PageHeader.cardTitle(title));
+        titles.add(Box.createVerticalStrut(3));
+        titles.add(PageHeader.caption(caption));
+        header.add(titles, BorderLayout.WEST);
+        if (headerControl != null) {
+            JPanel w = new JPanel(new GridBagLayout());
+            w.setOpaque(false);
+            w.add(headerControl);
+            header.add(w, BorderLayout.EAST);
+        }
+        card.add(header, BorderLayout.NORTH);
+        card.add(body, BorderLayout.CENTER);
+        return card;
+    }
+
+    private RoundedPanel buildAlertsCard() {
+        RoundedPanel card = RoundedPanel.card(18);
+        card.setLayout(new BorderLayout(0, 12));
         JPanel header = new JPanel(new BorderLayout());
         header.setOpaque(false);
-        JLabel title = new JLabel("Recent Parking Activity");
-        title.setFont(new Font("Inter", Font.BOLD, 15));
-        title.setForeground(new Color(15, 23, 42));
-
-        JButton btnViewAll = new JButton("View All \u2192");
-        btnViewAll.setFont(new Font("Inter", Font.BOLD, 12));
-        btnViewAll.setForeground(new Color(29, 78, 216));
-        btnViewAll.setContentAreaFilled(false);
-        btnViewAll.setBorderPainted(false);
-        btnViewAll.setFocusPainted(false);
-        btnViewAll.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        btnViewAll.addActionListener(e -> navigationHandler.accept("SEARCH"));
-
-        header.add(title, BorderLayout.WEST);
-        header.add(btnViewAll, BorderLayout.EAST);
+        JPanel titles = new JPanel();
+        titles.setOpaque(false);
+        titles.setLayout(new BoxLayout(titles, BoxLayout.Y_AXIS));
+        titles.add(PageHeader.cardTitle("Operational alerts"));
+        titles.add(Box.createVerticalStrut(3));
+        titles.add(PageHeader.caption("Click an alert to locate the bay"));
+        header.add(titles, BorderLayout.WEST);
+        alertsCount = new JLabel();
+        alertsCount.setFont(UITheme.font(Font.BOLD, 11));
+        alertsCount.setForeground(UITheme.TEXT_SECONDARY);
+        JPanel w = new JPanel(new GridBagLayout());
+        w.setOpaque(false);
+        w.add(alertsCount);
+        header.add(w, BorderLayout.EAST);
         card.add(header, BorderLayout.NORTH);
 
-        // Table
-        String[] columns = {"Date & Time", "Vehicle No.", "Action", "Slot", "Type", "Fee"};
+        alertsList = new JPanel();
+        alertsList.setOpaque(false);
+        alertsList.setLayout(new BoxLayout(alertsList, BoxLayout.Y_AXIS));
+        JPanel holder = new JPanel(new BorderLayout());
+        holder.setOpaque(false);
+        holder.add(alertsList, BorderLayout.NORTH);
+        JScrollPane sp = new JScrollPane(holder);
+        sp.setBorder(null);
+        sp.setOpaque(false);
+        sp.getViewport().setOpaque(false);
+        sp.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        card.add(sp, BorderLayout.CENTER);
+        return card;
+    }
+
+    private RoundedPanel buildActivityCard() {
+        String[] columns = {"Time", "Vehicle", "Event", "Bay", "Type", "Fee"};
         activityTableModel = new DefaultTableModel(columns, 0) {
             @Override
             public boolean isCellEditable(int row, int col) {
                 return false;
             }
         };
-
         JTable table = new JTable(activityTableModel);
-        table.setFont(new Font("Inter", Font.PLAIN, 12));
-        table.setRowHeight(28);
-        table.setShowGrid(false);
-        table.setIntercellSpacing(new Dimension(0, 0));
-        table.getTableHeader().setFont(new Font("Inter", Font.BOLD, 12));
-        table.getTableHeader().setForeground(new Color(51, 65, 85));
-        table.getTableHeader().setBackground(Color.WHITE);
-        table.getTableHeader().setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, new Color(226, 232, 240)));
+        com.smartparking.ui.theme.DarkTheme.styleTable(table);
+        table.getColumnModel().getColumn(2).setCellRenderer(new Badge.Renderer());
+        table.getColumnModel().getColumn(0).setPreferredWidth(170);
+        table.getColumnModel().getColumn(1).setPreferredWidth(140);
+        table.getColumnModel().getColumn(2).setPreferredWidth(90);
+        table.getColumnModel().getColumn(3).setPreferredWidth(60);
+        table.getColumnModel().getColumn(4).setPreferredWidth(110);
+        table.getColumnModel().getColumn(5).setPreferredWidth(90);
+        DarkThemeRight right = new DarkThemeRight();
+        table.getColumnModel().getColumn(5).setCellRenderer(right);
+        table.getColumnModel().getColumn(1).setCellRenderer(new MonoRenderer());
 
-        table.getColumnModel().getColumn(0).setPreferredWidth(125);
-        table.getColumnModel().getColumn(1).setPreferredWidth(95);
-        table.getColumnModel().getColumn(2).setPreferredWidth(55);
-        table.getColumnModel().getColumn(2).setCellRenderer(new ActionPillRenderer());
-        table.getColumnModel().getColumn(3).setPreferredWidth(40);
-        table.getColumnModel().getColumn(4).setPreferredWidth(75);
-        table.getColumnModel().getColumn(5).setPreferredWidth(65);
+        activityScroll = new JScrollPane(table);
+        activityScroll.setBorder(new com.smartparking.ui.theme.DarkTheme.RoundBorder(UITheme.BORDER_SUBTLE, UITheme.RADIUS));
+        activityEmpty = new EmptyState(IconType.TICKET, "No parking activity yet",
+                "Tickets issued at the entry gate will appear here as soon as the first vehicle arrives.");
 
-        JScrollPane tableScroll = new JScrollPane(table);
-        tableScroll.setBorder(null);
-        tableScroll.getViewport().setBackground(Color.WHITE);
-        card.add(tableScroll, BorderLayout.CENTER);
+        activityBody = new JPanel(new CardLayout());
+        activityBody.setOpaque(false);
+        activityBody.add(activityScroll, "TABLE");
+        activityBody.add(activityEmpty, "EMPTY");
+        activityBody.setPreferredSize(new Dimension(10, 8 * 34 + 40));
 
-        return card;
+        JButton viewAll = ModernButton.createGhost("Find a vehicle", VectorIconUtil.getIcon(IconType.ARROW_RIGHT, 13, UITheme.TEXT_SECONDARY));
+        viewAll.setHorizontalTextPosition(SwingConstants.LEFT);
+        viewAll.addActionListener(e -> navigationHandler.accept("SEARCH"));
+        return cardWith("Recent activity", "Latest tickets issued and closed", activityBody, viewAll);
     }
 
-    private JPanel buildRightSideColumn() {
-        JPanel col = new JPanel();
-        col.setLayout(new BoxLayout(col, BoxLayout.Y_AXIS));
-        col.setOpaque(false);
-
-        // Top: Alerts Card
-        JPanel alertsCard = createWhiteCard();
-        alertsCard.setLayout(new BorderLayout(0, 8));
-        alertsCard.setBorder(BorderFactory.createEmptyBorder(12, 14, 12, 14));
-
-        JLabel aTitle = new JLabel("Live Operational Alerts");
-        aTitle.setFont(new Font("Inter", Font.BOLD, 15));
-        aTitle.setForeground(new Color(15, 23, 42));
-        alertsCard.add(aTitle, BorderLayout.NORTH);
-
-        alertsList = new JPanel();
-        alertsList.setLayout(new BoxLayout(alertsList, BoxLayout.Y_AXIS));
-        alertsList.setOpaque(false);
-
-        alertsCard.add(alertsList, BorderLayout.CENTER);
-        col.add(alertsCard);
-        col.add(Box.createVerticalStrut(10));
-
-        // Bottom: 2x2 Quick Actions with high-contrast text and vector icons (New Entry, Checkout, Reserve Slot, View Reports)
-        JPanel qaCard = createWhiteCard();
-        qaCard.setLayout(new GridLayout(2, 2, 8, 8));
-        qaCard.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
-        qaCard.setMaximumSize(new Dimension(Integer.MAX_VALUE, 110));
-        qaCard.setPreferredSize(new Dimension(300, 110));
-
-        qaCard.add(createQuickActionButton("New Entry", com.smartparking.ui.util.VectorIconUtil.IconType.TICKET, new Color(5, 150, 105), "ENTRY"));
-        qaCard.add(createQuickActionButton("Checkout", com.smartparking.ui.util.VectorIconUtil.IconType.PAYMENT, new Color(220, 38, 38), "EXIT"));
-        qaCard.add(createQuickActionButton("Reserve Slot", com.smartparking.ui.util.VectorIconUtil.IconType.CLOCK, new Color(37, 99, 235), "RESERVATIONS"));
-        qaCard.add(createQuickActionButton("View Reports", com.smartparking.ui.util.VectorIconUtil.IconType.REPORTS, new Color(109, 40, 217), "REPORTS"));
-
-        col.add(qaCard);
-        return col;
-    }
-
-    private JPanel createAlertItem(String boldTag, String text, String slotId, Color bg, Color border, Color fg) {
-        JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
-        p.setBackground(bg);
-        p.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(border, 1, true),
-                BorderFactory.createEmptyBorder(3, 8, 3, 8)
-        ));
-        p.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
-        p.setCursor(new Cursor(Cursor.HAND_CURSOR));
-
-        JLabel b = new JLabel(boldTag);
-        b.setFont(new Font("Inter", Font.BOLD, 11));
-        b.setForeground(fg);
-
-        JLabel t = new JLabel(text);
-        t.setFont(new Font("Inter", Font.PLAIN, 11));
-        t.setForeground(fg);
-
-        p.add(b);
-        p.add(t);
-
-        // Clicking alert highlights that bay on Floor Map
-        p.addMouseListener(new MouseAdapter() {
-            @Override
-            public void mouseClicked(MouseEvent e) {
-                if (slotId != null && !slotId.isBlank()) {
-                    navigationHandler.accept("FLOORS:" + slotId);
-                } else {
-                    navigationHandler.accept("FLOORS");
-                }
-            }
-        });
-
-        return p;
-    }
-
-    private JButton createQuickActionButton(String label, com.smartparking.ui.util.VectorIconUtil.IconType iconType, Color bg, String cardKey) {
-        Icon icon = com.smartparking.ui.util.VectorIconUtil.getIcon(iconType, 16, Color.WHITE);
-        JButton btn = new JButton(label, icon) {
-            @Override
-            protected void paintComponent(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-
-                Color fill = getModel().isPressed() ? bg.darker() : (getModel().isRollover() ? bg.brighter() : bg);
-                g2.setColor(fill);
-                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 8, 8);
-                g2.dispose();
-                super.paintComponent(g);
-            }
-        };
-        btn.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        btn.setForeground(Color.WHITE);
-        btn.setIconTextGap(8);
-        btn.setFocusPainted(false);
-        btn.setBorderPainted(false);
-        btn.setContentAreaFilled(false);
-        btn.setOpaque(false);
-        btn.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        btn.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
-        btn.addActionListener(e -> navigationHandler.accept(cardKey));
-        return btn;
-    }
-
-    private JPanel buildFooterBar() {
-        JPanel footer = new JPanel(new BorderLayout());
-        footer.setPreferredSize(new Dimension(getWidth(), 30));
-        footer.setBackground(Color.WHITE);
-        footer.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(1, 0, 0, 0, new Color(219, 227, 240)),
-                BorderFactory.createEmptyBorder(0, 16, 0, 16)
-        ));
-
-        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 18, 0));
-        left.setOpaque(false);
-
-        JLabel status = new JLabel("\u25CF All Systems Operational");
-        status.setFont(new Font("Inter", Font.BOLD, 12));
-        status.setForeground(new Color(22, 163, 74));
-
-        JLabel db = new JLabel("Database Connected (SQLite \u2014 IST Asia/Kolkata)");
-        db.setFont(new Font("Inter", Font.PLAIN, 12));
-        db.setForeground(new Color(51, 65, 85));
-
-        lastUpdatedLabel = new JLabel("Last Updated: " + LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")));
-        lastUpdatedLabel.setFont(new Font("Inter", Font.PLAIN, 12));
-        lastUpdatedLabel.setForeground(new Color(100, 116, 139));
-
-        left.add(status);
-        left.add(db);
-        left.add(lastUpdatedLabel);
-
-        JLabel right = new JLabel("Grand Tech Park Garage \u2014 Uttar Pradesh, India (INR \u20B9)");
-        right.setFont(new Font("Inter", Font.PLAIN, 12));
-        right.setForeground(new Color(100, 116, 139));
-
-        footer.add(left, BorderLayout.WEST);
-        footer.add(right, BorderLayout.EAST);
-        return footer;
-    }
-
-    private JPanel createWhiteCard() {
-        JPanel p = new JPanel();
-        p.setBackground(Color.WHITE);
-        p.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(219, 227, 240), 1, true),
-                BorderFactory.createEmptyBorder(0, 0, 0, 0)
-        ));
-        return p;
-    }
-
+    // =====================================================================================
+    // Data
+    // =====================================================================================
     /**
-     * Refreshes all KPI metrics, activity table, alerts, and charts from live SQLite records.
-     * Guarantees that: available + occupied + reserved + maintenance = total capacity (150).
+     * Refreshes all metrics, charts, alerts and the activity table from live SQLite records.
      */
     public void refreshData() {
-        int totalCapacity = slotDao.countTotalSlots();
-        if (totalCapacity == 0) totalCapacity = 150;
+        LocalDate today = LocalDate.now(IST);
 
-        int availableCount = slotDao.countByStatus("AVAILABLE");
-        int occupiedCount = slotDao.countByStatus("OCCUPIED");
-        int reservedCount = slotDao.countByStatus("RESERVED");
-        int maintenanceCount = slotDao.countByStatus("MAINTENANCE");
+        int total = slotDao.countTotalSlots();
+        int available = slotDao.countByStatus("AVAILABLE");
+        int occupied = slotDao.countByStatus("OCCUPIED");
+        int reserved = slotDao.countByStatus("RESERVED");
+        int maintenance = slotDao.countByStatus("MAINTENANCE");
+        double occPct = total > 0 ? occupied * 100.0 / total : 0;
+        double availPct = total > 0 ? available * 100.0 / total : 0;
 
-        double occupancyPct = totalCapacity > 0 ? ((double) occupiedCount / totalCapacity) * 100.0 : 0.0;
-        double availPct = totalCapacity > 0 ? ((double) availableCount / totalCapacity) * 100.0 : 0.0;
-        double todayRev = paymentDao.getTodayRevenue();
+        availableCard.setValue(String.valueOf(available));
+        availableCard.setSubtitle(String.format("%.0f%% of %d bays", availPct, total));
+        occupiedCard.setValue(String.valueOf(occupied));
+        occupiedCard.setSubtitle(maintenance > 0 ? maintenance + " in maintenance" : "Vehicles on site");
+        reservedCard.setValue(String.valueOf(reserved));
+        reservedCard.setSubtitle("Held for bookings");
+        occupancyCard.setValue(String.format("%.1f%%", occPct));
+        boolean high = occPct >= 80;
+        occupancyCard.setSubtitle(high ? "High load — consider overflow" : (occPct >= 55 ? "Moderate load" : "Normal load"));
+        occupancyCard.setSubtitleColor(high ? UITheme.WARNING_TEXT : UITheme.TEXT_TERTIARY);
 
-        // 1. Update 6 KPI Cards with strictly accurate math from SQLite
-        totalCapacityCard.updateValues(String.valueOf(totalCapacity), "Slots");
-        availableSlotsCard.updateValues(String.valueOf(availableCount), String.format("%.1f%%", availPct));
-        occupiedSlotsCard.updateValues(String.valueOf(occupiedCount), String.format("%.1f%%", occupancyPct));
-        occupancyRateCard.updateValues(String.format("%.1f%%", occupancyPct), occupiedCount > 80 ? "\u2191 High Load" : "\u2193 Normal Load");
-        revenueCard.updateValues(MoneyFormat.format(todayRev), "Today (IST)");
-        reservationsCard.updateValues(String.valueOf(reservedCount), "Active");
+        double revToday = paymentDao.getTodayRevenue();
+        double revYesterday = paymentDao.getRevenueForDate(today.minusDays(1));
+        revenueCard.setValue(MoneyFormat.format(revToday));
+        setDelta(revenueCard, revToday, revYesterday, "vs yesterday");
 
-        // 2. Update Recent Activity Table from SQLite
-        activityTableModel.setRowCount(0);
-        List<ParkingTicket> recentTickets = ticketDao.findRecent(8);
-        if (!recentTickets.isEmpty()) {
-            for (ParkingTicket t : recentTickets) {
-                String timeStr = t.getEntryTime() != null ? DateFormat.display(t.getEntryTime()) : DateFormat.display(LocalDateTime.now());
-                String action = "ACTIVE".equalsIgnoreCase(t.getStatus().name()) ? "Entry" : "Exit";
-                String feeStr = t.getTotalAmount() > 0 ? MoneyFormat.format(t.getTotalAmount()) : "\u2014";
-                activityTableModel.addRow(new Object[]{
-                        timeStr,
-                        PlateUtil.format(t.getLicensePlate()),
-                        action,
-                        t.getSlotId(),
-                        t.getVehicleType().name(),
-                        feeStr
-                });
-            }
-        } else {
-            String nowStr = DateFormat.display(LocalDateTime.now());
-            activityTableModel.addRow(new Object[]{nowStr, "UP32 AB 1234", "Entry", "A1", "CAR", "\u2014"});
-            activityTableModel.addRow(new Object[]{nowStr, "UP16 BC 2468", "Exit", "A2", "CAR", MoneyFormat.format(85.0)});
-            activityTableModel.addRow(new Object[]{nowStr, "UP32 CT 9876", "Entry", "C39", "HCV", "\u2014"});
-            activityTableModel.addRow(new Object[]{nowStr, "UP70 XY 5678", "Exit", "A11", "MOTORCYCLE", MoneyFormat.format(20.0)});
-            activityTableModel.addRow(new Object[]{nowStr, "UP32 EV 4321", "Entry", "B17", "EV_CAR", "\u2014"});
-        }
+        Map<LocalDate, int[]> todayTurnover = ticketDao.getTurnoverMetrics(today, today);
+        int[] tt = todayTurnover.getOrDefault(today, new int[]{0, 0});
+        trafficCard.setValue(String.valueOf(tt[0] + tt[1]));
+        trafficCard.setSubtitle(tt[0] + " entries  ·  " + tt[1] + " exits");
 
-        // 3. Update Donut Chart: Sum of legend items equals center count equals occupied count
+        // Charts
+        turnoverChart.reload();
+        levelOccupancy.reload();
+        revenueChart.reload(today);
+
         Map<VehicleType, Integer> typeCounts = ticketDao.getOccupiedVehicleTypeCounts();
         int cars = typeCounts.getOrDefault(VehicleType.CAR, 0) + typeCounts.getOrDefault(VehicleType.AUTO_RICKSHAW, 0);
         int bikes = typeCounts.getOrDefault(VehicleType.MOTORCYCLE, 0) + typeCounts.getOrDefault(VehicleType.EV_TWO_WHEELER, 0) + typeCounts.getOrDefault(VehicleType.BIKE, 0);
         int trucks = typeCounts.getOrDefault(VehicleType.HCV, 0) + typeCounts.getOrDefault(VehicleType.LCV, 0) + typeCounts.getOrDefault(VehicleType.TRUCK, 0);
         int evs = typeCounts.getOrDefault(VehicleType.EV_CAR, 0) + typeCounts.getOrDefault(VehicleType.ELECTRIC_CAR, 0);
+        // Bays marked OCCUPIED without a matching active ticket are shown honestly as "Unmatched"
+        int unmatched = Math.max(0, occupied - (cars + bikes + trucks + evs));
+        donutChart.setData(new int[]{cars, bikes, trucks, evs, unmatched});
 
-        // If no active vehicles in fresh table, fallback to current occupied count proportion
-        if (occupiedCount == 0) {
-            cars = 0; bikes = 0; trucks = 0; evs = 0;
-        } else if (cars + bikes + trucks + evs == 0) {
-            cars = (int) Math.round(occupiedCount * 0.60);
-            bikes = (int) Math.round(occupiedCount * 0.23);
-            trucks = (int) Math.round(occupiedCount * 0.09);
-            evs = occupiedCount - (cars + bikes + trucks);
-        } else if (cars + bikes + trucks + evs != occupiedCount) {
-            // Guarantee sum of legend items strictly equals occupied count
-            int diff = occupiedCount - (cars + bikes + trucks + evs);
-            cars = Math.max(0, cars + diff);
-        }
-        distributionChart.setDistribution(cars, bikes, trucks, evs);
-
-        // 4. Update Live Operational Alerts from Real SQLite records
         refreshAlerts();
+        refreshActivity();
 
-        // 5. Update Turnover Trend Chart
-        turnoverChart.refreshChartData();
-
-        if (lastUpdatedLabel != null) {
-            lastUpdatedLabel.setText("Last Updated: " + LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")));
-        }
-
+        pageHeader.setSubtitle("Live status across " + Math.max(1, parkingLot.getFloors().size()) + " levels  ·  Updated "
+                + LocalDateTime.now(IST).format(DateTimeFormatter.ofPattern("HH:mm:ss")));
+        revalidate();
         repaint();
     }
 
+    private static void setDelta(MetricCard card, double now, double before, String suffix) {
+        if (before <= 0 && now <= 0) {
+            card.setSubtitle("No payments yet");
+            card.setSubtitleColor(UITheme.TEXT_TERTIARY);
+        } else if (before <= 0) {
+            card.setSubtitle("None " + suffix.replace("vs ", ""));
+            card.setSubtitleColor(UITheme.SUCCESS_TEXT);
+        } else {
+            double d = (now - before) / before * 100.0;
+            card.setSubtitle(String.format("%s%.0f%% %s", d >= 0 ? "+" : "\u2212", Math.abs(d), suffix));
+            card.setSubtitleColor(d >= 0 ? UITheme.SUCCESS_TEXT : UITheme.ERROR_TEXT);
+        }
+    }
+
+    private void refreshActivity() {
+        activityTableModel.setRowCount(0);
+        List<ParkingTicket> recent = ticketDao.findRecent(8);
+        for (ParkingTicket t : recent) {
+            boolean active = "ACTIVE".equalsIgnoreCase(t.getStatus().name());
+            LocalDateTime when = active || t.getExitTime() == null ? t.getEntryTime() : t.getExitTime();
+            activityTableModel.addRow(new Object[]{
+                    when != null ? DateFormat.display(when) : "—",
+                    PlateUtil.format(t.getLicensePlate()),
+                    active ? "Entry" : "Exit",
+                    t.getSlotId(),
+                    prettyType(t.getVehicleType()),
+                    t.getTotalAmount() > 0 ? MoneyFormat.format(t.getTotalAmount()) : "—"
+            });
+        }
+        ((CardLayout) activityBody.getLayout()).show(activityBody, recent.isEmpty() ? "EMPTY" : "TABLE");
+    }
+
     private void refreshAlerts() {
-        if (alertsList == null) return;
         alertsList.removeAll();
+        int count = 0;
+        LocalDateTime now = LocalDateTime.now(IST);
 
-        int alertCount = 0;
-
-        // 1. Overstay Tickets (>4 hours active)
-        List<ParkingTicket> overstay = ticketDao.findOverstayTickets(4);
-        for (ParkingTicket t : overstay) {
-            if (alertCount >= 4) break;
-            long hours = Duration.between(t.getEntryTime(), LocalDateTime.now()).toHours();
-            String msg = t.getSlotId() + " (" + PlateUtil.format(t.getLicensePlate()) + ") over by " + Math.max(1, hours - 2) + "h";
-            alertsList.add(createAlertItem("Overstay", msg, t.getSlotId(),
-                    new Color(254, 242, 242), new Color(252, 165, 165), new Color(127, 29, 29)));
-            alertsList.add(Box.createVerticalStrut(6));
-            alertCount++;
+        for (ParkingTicket t : ticketDao.findOverstayTickets(OVERSTAY_HOURS)) {
+            if (count >= 6) break;
+            long hours = Duration.between(t.getEntryTime(), now).toHours();
+            addAlert(UITheme.ERROR, IconType.CLOCK, "Overstay · " + t.getSlotId(),
+                    PlateUtil.format(t.getLicensePlate()) + " parked " + hours + "h (limit " + OVERSTAY_HOURS + "h)", t.getSlotId());
+            count++;
         }
-
-        // 2. Active / Upcoming Reservations
-        List<Reservation> activeReservations = reservationDao.findAll();
-        for (Reservation r : activeReservations) {
-            if (alertCount >= 4) break;
+        for (Reservation r : reservationDao.findAll()) {
+            if (count >= 6) break;
             if (r.getStatus() != null && "CONFIRMED".equalsIgnoreCase(r.getStatus().name())) {
-                String msg = r.getSlotId() + " reserved (" + r.getReservationCode() + ")";
-                alertsList.add(createAlertItem("Reservation", msg, r.getSlotId(),
-                        new Color(255, 247, 237), new Color(253, 186, 116), new Color(124, 45, 18)));
-                alertsList.add(Box.createVerticalStrut(6));
-                alertCount++;
+                String when = r.getStartTime() != null ? r.getStartTime().format(DateTimeFormatter.ofPattern("d MMM, h:mm a")) : "";
+                addAlert(UITheme.WARNING, IconType.CALENDAR, "Reservation · " + r.getSlotId(),
+                        r.getReservationCode() + (when.isEmpty() ? "" : "  ·  from " + when), r.getSlotId());
+                count++;
             }
         }
-
-        // 3. Maintenance Slots
-        List<ParkingSlot> maintSlots = slotDao.findAllByStatus("MAINTENANCE");
-        if (!maintSlots.isEmpty() && alertCount < 4) {
+        List<ParkingSlot> maint = slotDao.findAllByStatus("MAINTENANCE");
+        if (!maint.isEmpty() && count < 6) {
             StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < Math.min(3, maintSlots.size()); i++) {
+            for (int i = 0; i < Math.min(4, maint.size()); i++) {
                 if (i > 0) sb.append(", ");
-                sb.append(maintSlots.get(i).getSlotId());
+                sb.append(maint.get(i).getSlotId());
             }
-            sb.append(" offline");
-            String firstSlot = maintSlots.get(0).getSlotId();
-            alertsList.add(createAlertItem("Maintenance", sb.toString(), firstSlot,
-                    new Color(241, 245, 249), new Color(203, 213, 225), new Color(51, 65, 85)));
-            alertsList.add(Box.createVerticalStrut(6));
-            alertCount++;
+            if (maint.size() > 4) sb.append(" +").append(maint.size() - 4);
+            addAlert(UITheme.SLOT_MAINTENANCE, IconType.WRENCH, maint.size() + " bays offline", sb.toString(), maint.get(0).getSlotId());
+            count++;
         }
-
-        // Fallback default clean alert if garage has zero warnings
-        if (alertCount == 0) {
-            alertsList.add(createAlertItem("Status", "All 150 bays and gates operating nominally", "",
-                    new Color(240, 253, 244), new Color(187, 247, 208), new Color(21, 128, 61)));
+        if (count == 0) {
+            EmptyState ok = new EmptyState(IconType.CHECK, "All clear", "No overstays, pending reservations or offline bays.");
+            ok.setAlignmentX(LEFT_ALIGNMENT);
+            alertsList.add(ok);
+            alertsCount.setText("");
+        } else {
+            alertsCount.setText(count + " open");
         }
-
         alertsList.revalidate();
         alertsList.repaint();
     }
 
-    // =========================================================================
-    // INNER CLASS: 100% Vector Graphic KPI Summary Card (No font glyph dependency)
-    // =========================================================================
-    private static class KPICard extends JPanel {
-        private final JLabel valueLabel;
-        private final JLabel subLabel;
-
-        public KPICard(com.smartparking.ui.util.VectorIconUtil.IconType iconType, Color iconBg, Color iconFg, String title, String val, String sub, Color subColor) {
-            setLayout(new FlowLayout(FlowLayout.LEFT, 8, 8));
-            setBackground(Color.WHITE);
-            setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createLineBorder(new Color(219, 227, 240), 1, true),
-                    BorderFactory.createEmptyBorder(4, 6, 4, 6)
-            ));
-
-            // Circular Icon Badge (40x40) with pure anti-aliased vector rendering
-            JPanel iconCircle = new JPanel(new GridBagLayout()) {
-                @Override
-                protected void paintComponent(Graphics g) {
-                    Graphics2D g2 = (Graphics2D) g.create();
-                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                    g2.setColor(iconBg);
-                    g2.fillOval(0, 0, getWidth() - 1, getHeight() - 1);
-                    g2.dispose();
-                    super.paintComponent(g);
-                }
-            };
-            iconCircle.setPreferredSize(new Dimension(40, 40));
-            iconCircle.setOpaque(false);
-            JLabel iconLbl = new JLabel(com.smartparking.ui.util.VectorIconUtil.getIcon(iconType, 20, iconFg));
-            iconCircle.add(iconLbl);
-            add(iconCircle);
-
-            // Metrics Text Block
-            JPanel textBlock = new JPanel();
-            textBlock.setLayout(new BoxLayout(textBlock, BoxLayout.Y_AXIS));
-            textBlock.setOpaque(false);
-
-            JLabel titleLbl = new JLabel(title);
-            titleLbl.setFont(new Font("Inter", Font.BOLD, 11));
-            titleLbl.setForeground(new Color(51, 65, 85));
-
-            valueLabel = new JLabel(val);
-            valueLabel.setFont(new Font("Inter", Font.BOLD, 22));
-            valueLabel.setForeground(new Color(15, 23, 42));
-
-            subLabel = new JLabel(sub);
-            subLabel.setFont(new Font("Inter", Font.BOLD, 11));
-            subLabel.setForeground(subColor);
-
-            textBlock.add(titleLbl);
-            textBlock.add(valueLabel);
-            textBlock.add(subLabel);
-            add(textBlock);
-        }
-
-        public void updateValues(String val, String sub) {
-            valueLabel.setText(val);
-            subLabel.setText(sub);
-            revalidate();
-            repaint();
-        }
+    private void addAlert(Color color, IconType iconType, String title, String detail, String slotId) {
+        AlertRow row = new AlertRow(color, iconType, title, detail);
+        row.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                navigationHandler.accept(slotId != null && !slotId.isBlank() ? "FLOORS:" + slotId : "FLOORS");
+            }
+        });
+        alertsList.add(row);
+        alertsList.add(Box.createVerticalStrut(6));
     }
 
-    // =========================================================================
-    // INNER CLASS: Vehicle Turnover Trend Bar/Line Vector Chart
-    // =========================================================================
-    private static class TurnoverTrendChartPanel extends JPanel {
-        private String activeRange = "7 Days";
-        private final List<JButton> tabButtons = new ArrayList<>();
-        private final TicketDao ticketDao;
-        private final ChartCanvas canvas;
-
-        private String[] currentDays;
-        private String[] currentDates;
-        private int[] currentEntered;
-        private int[] currentExited;
-
-        public TurnoverTrendChartPanel(TicketDao ticketDao) {
-            this.ticketDao = ticketDao;
-            setLayout(new BorderLayout(0, 8));
-            setBackground(Color.WHITE);
-            setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createLineBorder(new Color(219, 227, 240), 1, true),
-                    BorderFactory.createEmptyBorder(12, 16, 12, 16)
-            ));
-
-            // Chart Header Bar
-            JPanel header = new JPanel(new BorderLayout());
-            header.setOpaque(false);
-
-            JPanel titleGroup = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 0));
-            titleGroup.setOpaque(false);
-
-            JLabel title = new JLabel("Vehicle Turnover Trend");
-            title.setFont(new Font("Inter", Font.BOLD, 15));
-            title.setForeground(new Color(15, 23, 42));
-
-            titleGroup.add(title);
-            titleGroup.add(createLegendChip(new Color(37, 99, 235), true, "Entered"));
-            titleGroup.add(createLegendChip(new Color(21, 128, 61), false, "Exited"));
-            header.add(titleGroup, BorderLayout.WEST);
-
-            // Filter Tabs
-            JPanel tabs = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
-            tabs.setOpaque(false);
-            tabs.add(createTabButton("7 Days", true));
-            tabs.add(createTabButton("30 Days", false));
-            tabs.add(createTabButton("3 Months", false));
-            tabs.add(createTabButton("1 Year", false));
-            header.add(tabs, BorderLayout.EAST);
-
-            add(header, BorderLayout.NORTH);
-
-            // Chart Area Canvas
-            canvas = new ChartCanvas();
-            add(canvas, BorderLayout.CENTER);
-
-            updateRangeData("7 Days");
-        }
-
-        public void refreshChartData() {
-            updateRangeData(activeRange);
-        }
-
-        private int[] aggregateTurnover(LocalDate from, LocalDate to) {
-            Map<LocalDate, int[]> map = ticketDao.getTurnoverMetrics(from, to);
-            int ent = 0, ext = 0;
-            if (map != null) {
-                for (int[] v : map.values()) {
-                    ent += v[0];
-                    ext += v[1];
-                }
+    static String prettyType(VehicleType t) {
+        if (t == null) return "—";
+        return switch (t) {
+            case HCV, LCV -> t.name();
+            case EV_CAR, ELECTRIC_CAR -> "EV car";
+            case EV_TWO_WHEELER -> "EV two-wheeler";
+            default -> {
+                String s = t.name().replace('_', ' ').toLowerCase();
+                yield Character.toUpperCase(s.charAt(0)) + s.substring(1);
             }
-            return new int[]{ent, ext};
-        }
+        };
+    }
 
-        private void updateRangeData(String range) {
-            LocalDate today = LocalDate.now(ZoneId.of("Asia/Kolkata"));
+    // =====================================================================================
+    // Components
+    // =====================================================================================
 
-            switch (range) {
-                case "30 Days" -> {
-                    int points = 6;
-                    currentDays = new String[points];
-                    currentDates = new String[points];
-                    currentEntered = new int[points];
-                    currentExited = new int[points];
-                    DateTimeFormatter fmt = DateTimeFormatter.ofPattern("MMM d");
-                    for (int i = 0; i < points; i++) {
-                        LocalDate d = today.minusDays((points - 1 - i) * 5L);
-                        currentDays[i] = d.format(DateTimeFormatter.ofPattern("EEE"));
-                        currentDates[i] = d.format(fmt);
-                        int[] metrics = aggregateTurnover(d.minusDays(4), d);
-                        currentEntered[i] = Math.max(12, metrics[0]);
-                        currentExited[i] = Math.max(10, metrics[1]);
-                    }
-                }
-                case "3 Months" -> {
-                    int points = 6;
-                    currentDays = new String[points];
-                    currentDates = new String[points];
-                    currentEntered = new int[points];
-                    currentExited = new int[points];
-                    DateTimeFormatter fmt = DateTimeFormatter.ofPattern("MMM d");
-                    for (int i = 0; i < points; i++) {
-                        LocalDate d = today.minusDays((points - 1 - i) * 15L);
-                        currentDays[i] = "Wk " + (i + 1);
-                        currentDates[i] = d.format(fmt);
-                        int[] metrics = aggregateTurnover(d.minusDays(14), d);
-                        currentEntered[i] = Math.max(25, metrics[0]);
-                        currentExited[i] = Math.max(22, metrics[1]);
-                    }
-                }
-                case "1 Year" -> {
-                    int points = 6;
-                    currentDays = new String[points];
-                    currentDates = new String[points];
-                    currentEntered = new int[points];
-                    currentExited = new int[points];
-                    DateTimeFormatter fmt = DateTimeFormatter.ofPattern("MMM yyyy");
-                    for (int i = 0; i < points; i++) {
-                        LocalDate d = today.minusMonths(points - 1 - i);
-                        currentDays[i] = d.format(DateTimeFormatter.ofPattern("MMM"));
-                        currentDates[i] = d.format(fmt);
-                        int[] metrics = aggregateTurnover(d.withDayOfMonth(1), d.withDayOfMonth(d.lengthOfMonth()));
-                        currentEntered[i] = Math.max(30, metrics[0]);
-                        currentExited[i] = Math.max(28, metrics[1]);
-                    }
-                }
-                default -> { // "7 Days"
-                    int points = 7;
-                    currentDays = new String[points];
-                    currentDates = new String[points];
-                    currentEntered = new int[points];
-                    currentExited = new int[points];
-                    DateTimeFormatter fmt = DateTimeFormatter.ofPattern("dd MMM");
-                    for (int i = 0; i < points; i++) {
-                        LocalDate d = today.minusDays(points - 1 - i);
-                        currentDays[i] = d.format(DateTimeFormatter.ofPattern("EEE"));
-                        currentDates[i] = d.format(fmt);
-                        int[] metrics = aggregateTurnover(d, d);
-                        currentEntered[i] = Math.max(15, metrics[0]);
-                        currentExited[i] = Math.max(12, metrics[1]);
-                    }
-                }
-            }
-            canvas.repaint();
-        }
+    /** Clickable alert row: tinted icon, title, detail, chevron; hover highlight. */
+    private static class AlertRow extends JPanel {
+        private boolean hover;
 
-        private JPanel createLegendChip(Color color, boolean isSquare, String label) {
-            JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
-            p.setOpaque(false);
-            JLabel icon = new JLabel() {
+        AlertRow(Color color, IconType iconType, String title, String detail) {
+            super(new BorderLayout(12, 0));
+            setOpaque(false);
+            setBorder(new EmptyBorder(9, 10, 9, 10));
+            setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            setAlignmentX(LEFT_ALIGNMENT);
+            setMaximumSize(new Dimension(Integer.MAX_VALUE, 54));
+
+            add(new MetricCard.IconBadge(new JLabel(VectorIconUtil.getIcon(iconType, 14, Badge.textFor(color))), color, 30), BorderLayout.WEST);
+            JPanel text = new JPanel();
+            text.setOpaque(false);
+            text.setLayout(new BoxLayout(text, BoxLayout.Y_AXIS));
+            JLabel t = new JLabel(title);
+            t.setFont(UITheme.font(Font.BOLD, 12));
+            t.setForeground(UITheme.TEXT_PRIMARY);
+            JLabel d = new JLabel(detail);
+            d.setFont(UITheme.font(Font.PLAIN, 11));
+            d.setForeground(UITheme.TEXT_SECONDARY);
+            text.add(t);
+            text.add(Box.createVerticalStrut(2));
+            text.add(d);
+            add(text, BorderLayout.CENTER);
+            add(new JLabel(VectorIconUtil.getIcon(IconType.ARROW_RIGHT, 12, UITheme.TEXT_TERTIARY)), BorderLayout.EAST);
+            setToolTipText(title + " — " + detail);
+
+            addMouseListener(new MouseAdapter() {
                 @Override
-                protected void paintComponent(Graphics g) {
-                    Graphics2D g2 = (Graphics2D) g.create();
-                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                    g2.setColor(color);
-                    if (isSquare) {
-                        g2.fillRoundRect(0, (getHeight() - 8) / 2, 8, 8, 2, 2);
-                    } else {
-                        g2.fillOval(0, (getHeight() - 8) / 2, 8, 8);
-                    }
-                    g2.dispose();
+                public void mouseEntered(MouseEvent e) {
+                    hover = true;
+                    repaint();
                 }
-            };
-            icon.setPreferredSize(new Dimension(8, 14));
-            JLabel text = new JLabel(label);
-            text.setFont(new Font("Inter", Font.BOLD, 11));
-            text.setForeground(new Color(51, 65, 85));
-            p.add(icon);
-            p.add(text);
-            return p;
-        }
 
-        private JButton createTabButton(String label, boolean selected) {
-            JButton btn = new JButton(label) {
                 @Override
-                protected void paintComponent(Graphics g) {
-                    Graphics2D g2 = (Graphics2D) g.create();
-                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                    g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-
-                    boolean isSelected = label.equals(activeRange);
-                    if (isSelected) {
-                        g2.setColor(new Color(29, 78, 216)); // Solid dark primary blue #1d4ed8
-                        g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 14, 14);
-                        g2.setColor(Color.WHITE);
-                    } else if (getModel().isRollover()) {
-                        g2.setColor(new Color(226, 232, 240)); // #e2e8f0
-                        g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 14, 14);
-                        g2.setColor(new Color(203, 213, 225));
-                        g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 14, 14);
-                        g2.setColor(new Color(15, 23, 42)); // High-contrast slate-900
-                    } else {
-                        g2.setColor(new Color(241, 245, 249)); // #f1f5f9
-                        g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 14, 14);
-                        g2.setColor(new Color(203, 213, 225));
-                        g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 14, 14);
-                        g2.setColor(new Color(30, 41, 59)); // High-contrast slate-800
-                    }
-
-                    g2.setFont(getFont());
-                    FontMetrics fm = g2.getFontMetrics();
-                    int tx = (getWidth() - fm.stringWidth(getText())) / 2;
-                    int ty = (getHeight() + fm.getAscent() - fm.getDescent()) / 2;
-                    g2.drawString(getText(), tx, ty);
-                    g2.dispose();
-                }
-            };
-            btn.setFont(new Font("Segoe UI", Font.BOLD, 12));
-            btn.setFocusPainted(false);
-            btn.setBorderPainted(false);
-            btn.setContentAreaFilled(false);
-            btn.setOpaque(false);
-            btn.setCursor(new Cursor(Cursor.HAND_CURSOR));
-            btn.setPreferredSize(new Dimension(84, 28));
-
-            btn.addActionListener(e -> {
-                activeRange = label;
-                updateRangeData(activeRange);
-                for (JButton b : tabButtons) {
-                    b.repaint();
+                public void mouseExited(MouseEvent e) {
+                    hover = false;
+                    repaint();
                 }
             });
-            tabButtons.add(btn);
-            return btn;
         }
 
-        private class ChartCanvas extends JPanel {
-            public ChartCanvas() {
-                setOpaque(false);
-                setToolTipText("Vehicle Turnover Trend");
-
-                addMouseMotionListener(new MouseAdapter() {
-                    @Override
-                    public void mouseMoved(MouseEvent e) {
-                        if (currentEntered == null || currentEntered.length == 0) return;
-                        int leftMargin = 45;
-                        int rightMargin = 20;
-                        int chartW = getWidth() - leftMargin - rightMargin;
-                        int slotW = chartW / currentEntered.length;
-                        int idx = (e.getX() - leftMargin) / Math.max(1, slotW);
-                        if (idx >= 0 && idx < currentEntered.length) {
-                            setToolTipText(String.format("%s %s — Entered: %d, Exited: %d",
-                                    currentDays[idx], currentDates[idx], currentEntered[idx], currentExited[idx]));
-                        }
-                    }
-                });
-            }
-
-            @Override
-            protected void paintComponent(Graphics g) {
-                super.paintComponent(g);
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-
-                int w = getWidth();
-                int h = getHeight();
-
-                int leftMargin = 45;
-                int rightMargin = 20;
-                int topMargin = 20;
-                int bottomMargin = 45;
-
-                int chartW = w - leftMargin - rightMargin;
-                int chartH = h - topMargin - bottomMargin;
-
-                if (currentEntered == null || currentEntered.length == 0) {
-                    g2.dispose();
-                    return;
-                }
-
-                int barCount = currentEntered.length;
-
-                // Find max value to dynamically scale Y-Axis
-                int maxVal = 0;
-                for (int i = 0; i < barCount; i++) {
-                    if (currentEntered[i] > maxVal) maxVal = currentEntered[i];
-                    if (currentExited[i] > maxVal) maxVal = currentExited[i];
-                }
-
-                // Empty State Check
-                if (maxVal == 0) {
-                    g2.setColor(new Color(100, 116, 139));
-                    g2.setFont(new Font("Inter", Font.BOLD, 13));
-                    String emptyMsg = "No turnover recorded for this period";
-                    FontMetrics em = g2.getFontMetrics();
-                    g2.drawString(emptyMsg, (w - em.stringWidth(emptyMsg)) / 2, h / 2);
-                    g2.dispose();
-                    return;
-                }
-                maxVal = Math.max(40, (int) (Math.ceil(maxVal / 10.0) * 10));
-
-                // Y-Axis Title
-                g2.setColor(new Color(100, 116, 139));
-                g2.setFont(new Font("Inter", Font.BOLD, 10));
-                g2.drawString("Vehicles", leftMargin - 36, topMargin - 6);
-
-                // 1. Horizontal Gridlines & Y-Axis Scale
-                int steps = 4;
-                for (int s = 0; s <= steps; s++) {
-                    int yVal = (maxVal / steps) * s;
-                    int yPos = topMargin + chartH - (int) ((double) yVal / maxVal * chartH);
-                    g2.setColor(new Color(226, 232, 240)); // #e2e8f0
-                    g2.drawLine(leftMargin, yPos, w - rightMargin, yPos);
-
-                    g2.setColor(new Color(71, 85, 105)); // #475569
-                    g2.setFont(new Font("Inter", Font.PLAIN, 11));
-                    g2.drawString(String.valueOf(yVal), leftMargin - 26, yPos + 4);
-                }
-
-                int slotW = chartW / barCount;
-                int barW = Math.min(65, (int) (slotW * 0.60));
-
-                int[] lineX = new int[barCount];
-                int[] lineY = new int[barCount];
-
-                // 2. Draw Entered Blue Bars
-                for (int i = 0; i < barCount; i++) {
-                    int centerX = leftMargin + i * slotW + slotW / 2;
-                    int barX = centerX - barW / 2;
-                    int val = currentEntered[i];
-                    int barHeight = (int) ((double) val / maxVal * chartH);
-                    int barY = topMargin + chartH - barHeight;
-
-                    // Rounded blue bar
-                    g2.setColor(new Color(37, 99, 235)); // #2563eb
-                    g2.fillRoundRect(barX, barY, barW, barHeight, 6, 6);
-
-                    // Value label above bar
-                    g2.setColor(new Color(30, 58, 138)); // #1e3a8a
-                    g2.setFont(new Font("Inter", Font.BOLD, 11));
-                    FontMetrics fm = g2.getFontMetrics();
-                    g2.drawString(String.valueOf(val), centerX - fm.stringWidth(String.valueOf(val)) / 2, barY - 4);
-
-                    // X-Axis day & date labels
-                    g2.setColor(new Color(15, 23, 42)); // #0f172a
-                    g2.setFont(new Font("Inter", Font.BOLD, 11));
-                    FontMetrics dfm = g2.getFontMetrics();
-                    g2.drawString(currentDays[i], centerX - dfm.stringWidth(currentDays[i]) / 2, topMargin + chartH + 16);
-
-                    g2.setColor(new Color(71, 85, 105)); // #475569
-                    g2.setFont(new Font("Inter", Font.PLAIN, 10));
-                    FontMetrics sfm = g2.getFontMetrics();
-                    g2.drawString(currentDates[i], centerX - sfm.stringWidth(currentDates[i]) / 2, topMargin + chartH + 30);
-
-                    // Exited point coordinates
-                    lineX[i] = centerX;
-                    lineY[i] = topMargin + chartH - (int) ((double) currentExited[i] / maxVal * chartH);
-                }
-
-                // 3. Draw Exited Green Polyline with Circular Dots
-                g2.setColor(new Color(21, 128, 61)); // #15803d
-                g2.setStroke(new BasicStroke(2.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-                g2.drawPolyline(lineX, lineY, barCount);
-
-                for (int i = 0; i < barCount; i++) {
-                    g2.setColor(Color.WHITE);
-                    g2.fillOval(lineX[i] - 4, lineY[i] - 4, 9, 9);
-                    g2.setColor(new Color(21, 128, 61));
-                    g2.drawOval(lineX[i] - 4, lineY[i] - 4, 9, 9);
-                }
-
-                g2.dispose();
-            }
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setColor(hover ? UITheme.BG_HOVER : UITheme.BG_ELEVATED);
+            g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, UITheme.RADIUS, UITheme.RADIUS);
+            g2.setColor(hover ? UITheme.BORDER_STRONG : UITheme.BORDER_SUBTLE);
+            g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, UITheme.RADIUS, UITheme.RADIUS);
+            g2.dispose();
         }
     }
 
-    // =========================================================================
-    // INNER CLASS: Vehicle Type Distribution Donut Chart & Legend
-    // =========================================================================
-    private static class DonutChartPanel extends JPanel {
-        private int parkedCount = 35;
-        private double carPct = 0.60;
-        private double bikePct = 0.23;
-        private double truckPct = 0.09;
-        private double evPct = 0.08;
-
-        private final JLabel carsValueLabel;
-        private final JLabel bikesValueLabel;
-        private final JLabel trucksValueLabel;
-        private final JLabel evsValueLabel;
-
-        public DonutChartPanel() {
-            setLayout(new BorderLayout(0, 10));
-            setBackground(Color.WHITE);
-            setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createLineBorder(new Color(219, 227, 240), 1, true),
-                    BorderFactory.createEmptyBorder(12, 16, 12, 16)
-            ));
-
-            JLabel title = new JLabel("Vehicle Type Distribution");
-            title.setFont(new Font("Inter", Font.BOLD, 15));
-            title.setForeground(new Color(15, 23, 42));
-            add(title, BorderLayout.NORTH);
-
-            JPanel center = new JPanel(new GridLayout(1, 2, 14, 0));
-            center.setOpaque(false);
-
-            // Donut Ring Canvas
-            DonutCanvas canvas = new DonutCanvas();
-            center.add(canvas);
-
-            // Legend Rows
-            JPanel legend = new JPanel();
-            legend.setLayout(new BoxLayout(legend, BoxLayout.Y_AXIS));
-            legend.setOpaque(false);
-            legend.add(Box.createVerticalGlue());
-
-            carsValueLabel = new JLabel("21 \u00B7 60.0%");
-            bikesValueLabel = new JLabel("8 \u00B7 22.9%");
-            trucksValueLabel = new JLabel("3 \u00B7 8.6%");
-            evsValueLabel = new JLabel("3 \u00B7 8.6%");
-
-            legend.add(createLegendRow(new Color(37, 99, 235), "Cars", carsValueLabel));
-            legend.add(Box.createVerticalStrut(6));
-            legend.add(createLegendRow(new Color(217, 119, 6), "Bikes", bikesValueLabel));
-            legend.add(Box.createVerticalStrut(6));
-            legend.add(createLegendRow(new Color(124, 58, 237), "Trucks", trucksValueLabel));
-            legend.add(Box.createVerticalStrut(6));
-            legend.add(createLegendRow(new Color(22, 163, 74), "EVs", evsValueLabel));
-            legend.add(Box.createVerticalGlue());
-            center.add(legend);
-
-            add(center, BorderLayout.CENTER);
-        }
-
-        public void setDistribution(int cars, int bikes, int trucks, int evs) {
-            this.parkedCount = cars + bikes + trucks + evs;
-            double total = parkedCount > 0 ? (double) parkedCount : 1.0;
-            this.carPct = cars / total;
-            this.bikePct = bikes / total;
-            this.truckPct = trucks / total;
-            this.evPct = evs / total;
-
-            carsValueLabel.setText(String.format("%d \u00B7 %.1f%%", cars, carPct * 100.0));
-            bikesValueLabel.setText(String.format("%d \u00B7 %.1f%%", bikes, bikePct * 100.0));
-            trucksValueLabel.setText(String.format("%d \u00B7 %.1f%%", trucks, truckPct * 100.0));
-            evsValueLabel.setText(String.format("%d \u00B7 %.1f%%", evs, evPct * 100.0));
-
-            repaint();
-        }
-
-        private JPanel createLegendRow(Color dotColor, String label, JLabel valLabel) {
-            JPanel row = new JPanel(new BorderLayout());
-            row.setOpaque(false);
-
-            JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-            left.setOpaque(false);
-            JLabel dot = new JLabel() {
-                @Override
-                protected void paintComponent(Graphics g) {
-                    Graphics2D g2 = (Graphics2D) g.create();
-                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                    g2.setColor(dotColor);
-                    g2.fillOval(0, (getHeight() - 8) / 2, 8, 8);
-                    g2.dispose();
-                }
-            };
-            dot.setPreferredSize(new Dimension(8, 14));
-            JLabel lbl = new JLabel(label);
-            lbl.setFont(new Font("Inter", Font.PLAIN, 12));
-            lbl.setForeground(new Color(51, 65, 85));
-            left.add(dot);
-            left.add(lbl);
-
-            valLabel.setFont(new Font("Inter", Font.BOLD, 12));
-            valLabel.setForeground(new Color(15, 23, 42));
-
-            row.add(left, BorderLayout.WEST);
-            row.add(valLabel, BorderLayout.EAST);
-            return row;
-        }
-
-        private class DonutCanvas extends JPanel {
-            public DonutCanvas() {
-                setOpaque(false);
-            }
-
-            @Override
-            protected void paintComponent(Graphics g) {
-                super.paintComponent(g);
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-
-                int size = Math.min(getWidth(), getHeight()) - 16;
-                int x = (getWidth() - size) / 2;
-                int y = (getHeight() - size) / 2;
-
-                int ringStroke = 18;
-                g2.setStroke(new BasicStroke(ringStroke, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER));
-
-                double[] pcts = {carPct, bikePct, truckPct, evPct};
-                Color[] colors = {
-                        new Color(37, 99, 235), // Blue (Cars)
-                        new Color(217, 119, 6),  // Amber (Bikes)
-                        new Color(124, 58, 237), // Purple (Trucks)
-                        new Color(22, 163, 74)   // Green (EVs)
-                };
-
-                double startAngle = 90.0;
-                for (int i = 0; i < pcts.length; i++) {
-                    double angle = pcts[i] * 360.0;
-                    g2.setColor(colors[i]);
-                    g2.draw(new Arc2D.Double(x + ringStroke / 2.0, y + ringStroke / 2.0, size - ringStroke, size - ringStroke, startAngle, -angle, Arc2D.OPEN));
-                    startAngle -= angle;
-                }
-
-                // Center Text: Exact match to occupied vehicles count
-                g2.setColor(new Color(15, 23, 42));
-                g2.setFont(new Font("Inter", Font.BOLD, 20));
-                String numStr = String.valueOf(parkedCount);
-                FontMetrics fm = g2.getFontMetrics();
-                g2.drawString(numStr, x + size / 2 - fm.stringWidth(numStr) / 2, y + size / 2 + 2);
-
-                g2.setColor(new Color(51, 65, 85));
-                g2.setFont(new Font("Inter", Font.BOLD, 10));
-                FontMetrics sm = g2.getFontMetrics();
-                g2.drawString("Parked", x + size / 2 - sm.stringWidth("Parked") / 2, y + size / 2 + 16);
-
-                g2.dispose();
-            }
+    /** Right-aligned tabular numbers. */
+    private static class DarkThemeRight extends com.smartparking.ui.theme.DarkTheme.CellRenderer {
+        DarkThemeRight() {
+            super(SwingConstants.RIGHT);
         }
     }
 
-    // =========================================================================
-    // INNER CLASS: Custom TableCellRenderer for Green/Red Action Pills
-    // =========================================================================
-    private static class ActionPillRenderer extends DefaultTableCellRenderer {
-        public ActionPillRenderer() {
-            setHorizontalAlignment(SwingConstants.CENTER);
-            setFont(new Font("Inter", Font.BOLD, 11));
-            setOpaque(true);
+    /** Licence plates in the mono face. */
+    private static class MonoRenderer extends com.smartparking.ui.theme.DarkTheme.CellRenderer {
+        MonoRenderer() {
+            super(SwingConstants.LEFT);
         }
 
         @Override
         public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) {
-            super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
-            String text = value != null ? value.toString() : "";
-            setText(text);
+            Component c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+            c.setFont(UITheme.font(Font.BOLD, 12));
+            return c;
+        }
+    }
 
-            if ("Entry".equalsIgnoreCase(text)) {
-                setBackground(new Color(220, 252, 231)); // #dcfce7
-                setForeground(new Color(22, 101, 52));   // #166534
-                setBorder(BorderFactory.createEmptyBorder(2, 6, 2, 6));
-            } else if ("Exit".equalsIgnoreCase(text)) {
-                setBackground(new Color(254, 226, 226)); // #fee2e2
-                setForeground(new Color(153, 27, 27));   // #991b1b
-                setBorder(BorderFactory.createEmptyBorder(2, 6, 2, 6));
-            } else {
-                setBackground(Color.WHITE);
-                setForeground(new Color(15, 23, 42));
-                setBorder(null);
+    /** Shared helpers for the custom charts. */
+    private abstract static class ChartCanvas extends JComponent {
+        protected int hoverIdx = -1;
+
+        ChartCanvas() {
+            setOpaque(false);
+            MouseAdapter m = new MouseAdapter() {
+                @Override
+                public void mouseMoved(MouseEvent e) {
+                    int i = indexAt(e.getX());
+                    if (i != hoverIdx) {
+                        hoverIdx = i;
+                        repaint();
+                    }
+                }
+
+                @Override
+                public void mouseExited(MouseEvent e) {
+                    hoverIdx = -1;
+                    repaint();
+                }
+            };
+            addMouseListener(m);
+            addMouseMotionListener(m);
+        }
+
+        abstract int indexAt(int x);
+
+        static Graphics2D prep(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            g2.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
+            return g2;
+        }
+
+        /** Rounds an axis maximum up to a "nice" number. */
+        static int niceMax(double v) {
+            if (v <= 1) return 1;
+            double exp = Math.pow(10, Math.floor(Math.log10(v)));
+            double f = v / exp;
+            for (double c : new double[]{1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10}) {
+                if (f <= c + 1e-9) return (int) Math.ceil(c * exp);
             }
-            return this;
+            return (int) Math.ceil(10 * exp);
+        }
+
+        /** Floating tooltip card drawn inside the chart. */
+        static void tooltip(Graphics2D g2, int anchorX, int anchorY, int bounds, String title, String[] lines, Color[] colors) {
+            Font tf = UITheme.font(Font.BOLD, 12), lf = UITheme.font(Font.PLAIN, 12);
+            FontMetrics tm = g2.getFontMetrics(tf), lm = g2.getFontMetrics(lf);
+            int w = tm.stringWidth(title);
+            for (String l : lines) w = Math.max(w, lm.stringWidth(l) + 16);
+            w += 24;
+            int h = 14 + tm.getHeight() + lines.length * (lm.getHeight() + 2) + 8;
+            int x = Math.min(Math.max(4, anchorX + 12), bounds - w - 4);
+            int y = Math.max(4, anchorY - h / 2);
+            g2.setColor(new Color(0, 0, 0, 90));
+            g2.fill(new RoundRectangle2D.Float(x + 1, y + 3, w, h, 10, 10));
+            g2.setColor(UITheme.BG_HOVER);
+            g2.fill(new RoundRectangle2D.Float(x, y, w, h, 10, 10));
+            g2.setColor(UITheme.BORDER_STRONG);
+            g2.draw(new RoundRectangle2D.Float(x + 0.5f, y + 0.5f, w - 1, h - 1, 10, 10));
+            g2.setFont(tf);
+            g2.setColor(UITheme.TEXT_PRIMARY);
+            int ty = y + 10 + tm.getAscent();
+            g2.drawString(title, x + 12, ty);
+            g2.setFont(lf);
+            ty += 6;
+            for (int i = 0; i < lines.length; i++) {
+                ty += lm.getHeight() + 2;
+                g2.setColor(colors[i]);
+                g2.fillRoundRect(x + 12, ty - lm.getAscent() + 3, 8, 8, 3, 3);
+                g2.setColor(UITheme.TEXT_BODY);
+                g2.drawString(lines[i], x + 26, ty);
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- turnover chart
+    private class TurnoverChart extends ChartCanvas {
+        private String range = "7D";
+        private String[] labels = new String[0];
+        private String[] fullLabels = new String[0];
+        private int[] entered = new int[0];
+        private int[] exited = new int[0];
+        private static final int LEFT = 36, RIGHT = 8, TOP = 12, BOTTOM = 28;
+
+        JComponent rangeControl() {
+            return new SegmentedControl(new String[]{"7D", "30D", "90D", "1Y"}, 0, r -> {
+                range = r;
+                reload();
+                repaint();
+            });
+        }
+
+        void reload() {
+            LocalDate today = LocalDate.now(IST);
+            switch (range) {
+                case "30D" -> bucketDays(today, 30, 1, "d MMM");
+                case "90D" -> bucketDays(today, 91, 7, "d MMM");
+                case "1Y" -> bucketMonths(today, 12);
+                default -> bucketDays(today, 7, 1, "EEE");
+            }
+            repaint();
+        }
+
+        /** Groups daily metrics into buckets of {@code step} days, ending today. */
+        private void bucketDays(LocalDate today, int days, int step, String pattern) {
+            LocalDate from = today.minusDays(days - 1L);
+            Map<LocalDate, int[]> m = ticketDao.getTurnoverMetrics(from, today);
+            int n = (int) Math.ceil(days / (double) step);
+            labels = new String[n];
+            fullLabels = new String[n];
+            entered = new int[n];
+            exited = new int[n];
+            DateTimeFormatter f = DateTimeFormatter.ofPattern(pattern);
+            DateTimeFormatter ff = DateTimeFormatter.ofPattern("EEE, d MMM yyyy");
+            for (int i = 0; i < n; i++) {
+                LocalDate bStart = from.plusDays((long) i * step);
+                LocalDate bEnd = bStart.plusDays(step - 1L);
+                if (bEnd.isAfter(today)) bEnd = today;
+                for (LocalDate d = bStart; !d.isAfter(bEnd); d = d.plusDays(1)) {
+                    int[] v = m.get(d);
+                    if (v != null) {
+                        entered[i] += v[0];
+                        exited[i] += v[1];
+                    }
+                }
+                labels[i] = bStart.format(f);
+                fullLabels[i] = step == 1 ? bStart.format(ff) : "Week of " + bStart.format(DateTimeFormatter.ofPattern("d MMM"));
+            }
+        }
+
+        private void bucketMonths(LocalDate today, int months) {
+            LocalDate first = today.withDayOfMonth(1).minusMonths(months - 1L);
+            Map<LocalDate, int[]> m = ticketDao.getTurnoverMetrics(first, today);
+            labels = new String[months];
+            fullLabels = new String[months];
+            entered = new int[months];
+            exited = new int[months];
+            for (int i = 0; i < months; i++) {
+                LocalDate ms = first.plusMonths(i);
+                for (Map.Entry<LocalDate, int[]> e : m.entrySet()) {
+                    if (e.getKey().getYear() == ms.getYear() && e.getKey().getMonth() == ms.getMonth()) {
+                        entered[i] += e.getValue()[0];
+                        exited[i] += e.getValue()[1];
+                    }
+                }
+                labels[i] = ms.format(DateTimeFormatter.ofPattern("MMM"));
+                fullLabels[i] = ms.format(DateTimeFormatter.ofPattern("MMMM yyyy"));
+            }
+        }
+
+        @Override
+        int indexAt(int x) {
+            int n = entered.length;
+            if (n == 0) return -1;
+            double slot = (getWidth() - LEFT - RIGHT) / (double) n;
+            int i = (int) ((x - LEFT) / slot);
+            return i >= 0 && i < n ? i : -1;
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = prep(g);
+            int w = getWidth(), h = getHeight();
+            int n = entered.length;
+            int cw = w - LEFT - RIGHT, ch = h - TOP - BOTTOM;
+            int max = 0;
+            for (int i = 0; i < n; i++) max = Math.max(max, Math.max(entered[i], exited[i]));
+
+            // Legend (top-right inside chart)
+            Font small = UITheme.font(Font.PLAIN, 11);
+            g2.setFont(small);
+            FontMetrics sm = g2.getFontMetrics();
+
+            if (max == 0) {
+                g2.setColor(UITheme.BORDER_SUBTLE);
+                for (int s = 0; s <= 4; s++) {
+                    int y = TOP + ch - ch * s / 4;
+                    g2.drawLine(LEFT, y, w - RIGHT, y);
+                }
+                String msg = "No gate activity recorded in this period";
+                g2.setColor(UITheme.TEXT_SECONDARY);
+                g2.setFont(UITheme.font(Font.BOLD, 13));
+                FontMetrics fm = g2.getFontMetrics();
+                g2.drawString(msg, (w - fm.stringWidth(msg)) / 2, TOP + ch / 2);
+                g2.dispose();
+                return;
+            }
+            int step = niceMax(max * 1.05 / 4.0);
+            if (step < 1) step = 1;
+            int top = step * 4;
+            if (top < max) top += step;
+
+            // grid + y labels
+            for (int s = 0; s <= 4; s++) {
+                int y = TOP + ch - ch * s / 4;
+                g2.setColor(s == 0 ? UITheme.BORDER : UITheme.BORDER_SUBTLE);
+                if (s == 0) g2.drawLine(LEFT, y, w - RIGHT, y);
+                else {
+                    g2.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 1f, new float[]{3f, 4f}, 0));
+                    g2.drawLine(LEFT, y, w - RIGHT, y);
+                    g2.setStroke(new BasicStroke(1f));
+                }
+                String lbl = String.valueOf(top * s / 4);
+                g2.setColor(UITheme.TEXT_TERTIARY);
+                g2.drawString(lbl, LEFT - 8 - sm.stringWidth(lbl), y + 4);
+            }
+
+            double slot = cw / (double) n;
+            int barW = (int) Math.max(3, Math.min(28, slot * 0.5));
+            int labelEvery = n > 14 ? (int) Math.ceil(n / 8.0) : 1;
+            int[] lx = new int[n], ly = new int[n];
+
+            // hover band
+            if (hoverIdx >= 0) {
+                g2.setColor(UITheme.alpha(Color.WHITE, 10));
+                g2.fillRoundRect((int) (LEFT + hoverIdx * slot) + 2, TOP, (int) slot - 4, ch, 8, 8);
+            }
+
+            for (int i = 0; i < n; i++) {
+                int cx = (int) (LEFT + i * slot + slot / 2);
+                int bh = (int) Math.round(entered[i] / (double) top * ch);
+                int by = TOP + ch - bh;
+                Color barTop = hoverIdx == i ? UITheme.ACCENT_HOVER : UITheme.ACCENT;
+                if (bh > 0) {
+                    g2.setPaint(new GradientPaint(0, by, barTop, 0, TOP + ch, UITheme.blend(UITheme.ACCENT, UITheme.BG_CARD, 0.55)));
+                    g2.fill(new RoundRectangle2D.Float(cx - barW / 2f, by, barW, bh + 4, 6, 6));
+                    g2.setColor(UITheme.BG_CARD);
+                    g2.fillRect(cx - barW / 2, TOP + ch, barW, 5);
+                }
+                lx[i] = cx;
+                ly[i] = TOP + ch - (int) Math.round(exited[i] / (double) top * ch);
+                if (i % labelEvery == 0 || i == n - 1) {
+                    g2.setColor(hoverIdx == i ? UITheme.TEXT_PRIMARY : UITheme.TEXT_TERTIARY);
+                    g2.setFont(small);
+                    g2.drawString(labels[i], cx - sm.stringWidth(labels[i]) / 2, h - 8);
+                }
+            }
+
+            // exits line with soft area
+            if (n > 1) {
+                Path2D.Float area = new Path2D.Float();
+                area.moveTo(lx[0], TOP + ch);
+                for (int i = 0; i < n; i++) area.lineTo(lx[i], ly[i]);
+                area.lineTo(lx[n - 1], TOP + ch);
+                area.closePath();
+                g2.setPaint(new GradientPaint(0, TOP, UITheme.alpha(UITheme.SLOT_EV, 50), 0, TOP + ch, UITheme.alpha(UITheme.SLOT_EV, 0)));
+                g2.fill(area);
+                g2.setColor(UITheme.SLOT_EV);
+                g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                g2.drawPolyline(lx, ly, n);
+            }
+            for (int i = 0; i < n; i++) {
+                if (n <= 14 || i == hoverIdx) {
+                    int r = i == hoverIdx ? 5 : 3;
+                    g2.setColor(UITheme.BG_CARD);
+                    g2.fillOval(lx[i] - r - 1, ly[i] - r - 1, (r + 1) * 2, (r + 1) * 2);
+                    g2.setColor(UITheme.SLOT_EV);
+                    g2.fillOval(lx[i] - r, ly[i] - r, r * 2, r * 2);
+                }
+            }
+
+            // legend
+            g2.setFont(small);
+            int lxp = w - RIGHT - sm.stringWidth("Entries") - sm.stringWidth("Exits") - 50;
+            g2.setColor(UITheme.ACCENT);
+            g2.fillRoundRect(lxp, 2, 9, 9, 3, 3);
+            g2.setColor(UITheme.TEXT_SECONDARY);
+            g2.drawString("Entries", lxp + 14, 11);
+            int lxp2 = lxp + 14 + sm.stringWidth("Entries") + 16;
+            g2.setColor(UITheme.SLOT_EV);
+            g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g2.drawLine(lxp2, 7, lxp2 + 10, 7);
+            g2.setColor(UITheme.TEXT_SECONDARY);
+            g2.drawString("Exits", lxp2 + 15, 11);
+
+            if (hoverIdx >= 0 && hoverIdx < n) {
+                tooltip(g2, lx[hoverIdx], TOP + ch / 2, w, fullLabels[hoverIdx],
+                        new String[]{entered[hoverIdx] + " entries", exited[hoverIdx] + " exits"},
+                        new Color[]{UITheme.ACCENT, UITheme.SLOT_EV});
+            }
+            g2.dispose();
+        }
+    }
+
+    // ---------------------------------------------------------------- occupancy by level
+    private class LevelOccupancy extends JComponent {
+        private final List<int[]> levels = new ArrayList<>(); // {floor, occupied, reserved, maintenance, available, total}
+        private int hover = -1;
+
+        LevelOccupancy() {
+            MouseAdapter m = new MouseAdapter() {
+                @Override
+                public void mouseMoved(MouseEvent e) {
+                    int i = rowAt(e.getY());
+                    if (i != hover) {
+                        hover = i;
+                        setCursor(Cursor.getPredefinedCursor(i >= 0 ? Cursor.HAND_CURSOR : Cursor.DEFAULT_CURSOR));
+                        repaint();
+                    }
+                }
+
+                @Override
+                public void mouseExited(MouseEvent e) {
+                    hover = -1;
+                    repaint();
+                }
+
+                @Override
+                public void mouseClicked(MouseEvent e) {
+                    if (rowAt(e.getY()) >= 0) navigationHandler.accept("FLOORS");
+                }
+            };
+            addMouseListener(m);
+            addMouseMotionListener(m);
+            setToolTipText("Open the floor map");
+        }
+
+        private int rowH() {
+            return 56;
+        }
+
+        private int rowAt(int y) {
+            int i = y / rowH();
+            return i >= 0 && i < levels.size() ? i : -1;
+        }
+
+        void reload() {
+            levels.clear();
+            int floors = Math.max(1, parkingLot.getFloors().size());
+            for (int f = 1; f <= floors; f++) {
+                int occ = 0, res = 0, mnt = 0, av = 0;
+                List<ParkingSlot> slots = slotDao.findByFloor(f);
+                for (ParkingSlot s : slots) {
+                    String st = s.getStatus() == null ? "" : s.getStatus().toUpperCase();
+                    switch (st) {
+                        case "OCCUPIED" -> occ++;
+                        case "RESERVED" -> res++;
+                        case "MAINTENANCE" -> mnt++;
+                        default -> av++;
+                    }
+                }
+                if (!slots.isEmpty()) levels.add(new int[]{f, occ, res, mnt, av, slots.size()});
+            }
+            repaint();
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = ChartCanvas.prep(g);
+            int w = getWidth();
+            Font bold = UITheme.font(Font.BOLD, 13), small = UITheme.font(Font.PLAIN, 11);
+            FontMetrics bm = g2.getFontMetrics(bold), sm = g2.getFontMetrics(small);
+            String[] names = {"Ground", "Level 2", "Level 3", "Level 4", "Level 5"};
+            Color[] segColors = {UITheme.SLOT_OCCUPIED, UITheme.SLOT_RESERVED, UITheme.SLOT_MAINTENANCE};
+            for (int i = 0; i < levels.size(); i++) {
+                int[] l = levels.get(i);
+                int y = i * rowH();
+                if (hover == i) {
+                    g2.setColor(UITheme.BG_ELEVATED);
+                    g2.fillRoundRect(-6, y, w + 12, rowH() - 6, 8, 8);
+                }
+                String name = "L" + l[0] + " · " + (l[0] - 1 < names.length ? names[l[0] - 1] : "Level " + l[0]);
+                g2.setFont(bold);
+                g2.setColor(UITheme.TEXT_PRIMARY);
+                g2.drawString(name, 0, y + 6 + bm.getAscent());
+                int used = l[1] + l[2] + l[3];
+                String pct = Math.round(l[1] * 100.0 / Math.max(1, l[5])) + "%";
+                String right = l[1] + " / " + l[5] + " occupied";
+                g2.setFont(small);
+                g2.setColor(UITheme.TEXT_SECONDARY);
+                g2.drawString(right, w - sm.stringWidth(right), y + 6 + bm.getAscent());
+                g2.setFont(bold);
+                g2.setColor(UITheme.TEXT_PRIMARY);
+                g2.drawString(pct, w - sm.stringWidth(right) - 10 - bm.stringWidth(pct), y + 6 + bm.getAscent());
+
+                int by = y + 30, bh = 10;
+                g2.setColor(UITheme.tint(UITheme.SLOT_AVAILABLE));
+                g2.fillRoundRect(0, by, w, bh, bh, bh);
+                Shape clip = g2.getClip();
+                g2.clip(new RoundRectangle2D.Float(0, by, w, bh, bh, bh));
+                int x = 0;
+                int[] parts = {l[1], l[2], l[3]};
+                for (int p = 0; p < 3; p++) {
+                    int sw = (int) Math.round(parts[p] / (double) l[5] * w);
+                    if (sw > 0) {
+                        g2.setColor(segColors[p]);
+                        g2.fillRect(x, by, sw, bh);
+                        g2.setColor(UITheme.BG_CARD);
+                        g2.fillRect(x + sw - 1, by, 2, bh);
+                        x += sw;
+                    }
+                }
+                g2.setClip(clip);
+                if (used == 0) {
+                    g2.setColor(UITheme.blend(UITheme.SLOT_AVAILABLE, UITheme.BG_CARD, 0.4));
+                    g2.drawRoundRect(0, by, w - 1, bh - 1, bh, bh);
+                }
+            }
+            // legend
+            int ly = levels.size() * rowH() + 8;
+            String[] lbl = {"Occupied", "Reserved", "Maintenance", "Free"};
+            Color[] lc = {UITheme.SLOT_OCCUPIED, UITheme.SLOT_RESERVED, UITheme.SLOT_MAINTENANCE, UITheme.tintBorder(UITheme.SLOT_AVAILABLE)};
+            int lx = 0;
+            g2.setFont(small);
+            for (int i = 0; i < lbl.length; i++) {
+                g2.setColor(lc[i]);
+                g2.fillRoundRect(lx, ly, 8, 8, 3, 3);
+                g2.setColor(UITheme.TEXT_SECONDARY);
+                g2.drawString(lbl[i], lx + 13, ly + 8);
+                lx += 13 + sm.stringWidth(lbl[i]) + 14;
+            }
+            g2.dispose();
+        }
+    }
+
+    // ---------------------------------------------------------------- revenue chart
+    private class RevenueChart extends ChartCanvas {
+        private final double[] values = new double[7];
+        private final String[] labels = new String[7];
+        private final String[] fullLabels = new String[7];
+        private double weekTotal, prevWeekTotal;
+        private static final int TOP = 46, BOTTOM = 24;
+
+        void reload(LocalDate today) {
+            weekTotal = 0;
+            prevWeekTotal = 0;
+            for (int i = 0; i < 7; i++) {
+                LocalDate d = today.minusDays(6 - i);
+                values[i] = paymentDao.getRevenueForDate(d);
+                weekTotal += values[i];
+                labels[i] = d.format(DateTimeFormatter.ofPattern("EEE"));
+                fullLabels[i] = d.format(DateTimeFormatter.ofPattern("EEE, d MMM"));
+                prevWeekTotal += paymentDao.getRevenueForDate(d.minusDays(7));
+            }
+            repaint();
+        }
+
+        @Override
+        int indexAt(int x) {
+            int i = (int) (x / (getWidth() / 7.0));
+            return i >= 0 && i < 7 ? i : -1;
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = prep(g);
+            int w = getWidth(), h = getHeight();
+            // headline
+            g2.setFont(UITheme.font(Font.BOLD, 22));
+            g2.setColor(UITheme.TEXT_PRIMARY);
+            String total = MoneyFormat.format(weekTotal);
+            g2.drawString(total, 0, 24);
+            int tw = g2.getFontMetrics().stringWidth(total);
+            g2.setFont(UITheme.font(Font.BOLD, 12));
+            String delta;
+            Color dc;
+            if (prevWeekTotal > 0) {
+                double d = (weekTotal - prevWeekTotal) / prevWeekTotal * 100;
+                delta = String.format("%s%.0f%% vs prior week", d >= 0 ? "+" : "\u2212", Math.abs(d));
+                dc = d >= 0 ? UITheme.SUCCESS_TEXT : UITheme.ERROR_TEXT;
+            } else {
+                delta = weekTotal > 0 ? "No revenue in prior week" : "No completed payments";
+                dc = UITheme.TEXT_TERTIARY;
+            }
+            g2.setColor(dc);
+            g2.drawString(delta, tw + 12, 23);
+
+            int ch = h - TOP - BOTTOM;
+            double max = 0;
+            for (double v : values) max = Math.max(max, v);
+            double slot = w / 7.0;
+            int barW = (int) Math.min(30, slot * 0.56);
+            FontMetrics sm = g2.getFontMetrics(UITheme.font(Font.PLAIN, 11));
+            for (int i = 0; i < 7; i++) {
+                int cx = (int) (i * slot + slot / 2);
+                int bh = max > 0 ? (int) Math.round(values[i] / max * ch) : 0;
+                // track
+                g2.setColor(UITheme.BG_ELEVATED);
+                g2.fillRoundRect(cx - barW / 2, TOP, barW, ch, 6, 6);
+                if (bh > 0) {
+                    boolean isToday = i == 6;
+                    Color c = hoverIdx == i ? UITheme.SUCCESS_TEXT : (isToday ? UITheme.SUCCESS : UITheme.blend(UITheme.SUCCESS, UITheme.BG_CARD, 0.6));
+                    g2.setColor(c);
+                    g2.fillRoundRect(cx - barW / 2, TOP + ch - bh, barW, bh, 6, 6);
+                }
+                g2.setFont(UITheme.font(i == 6 ? Font.BOLD : Font.PLAIN, 11));
+                g2.setColor(i == 6 || hoverIdx == i ? UITheme.TEXT_PRIMARY : UITheme.TEXT_TERTIARY);
+                g2.drawString(labels[i] == null ? "" : labels[i], cx - sm.stringWidth(labels[i] == null ? "" : labels[i]) / 2, h - 6);
+            }
+            if (hoverIdx >= 0 && fullLabels[hoverIdx] != null) {
+                int cx = (int) (hoverIdx * slot + slot / 2);
+                tooltip(g2, cx, TOP + ch / 2, w, fullLabels[hoverIdx],
+                        new String[]{MoneyFormat.format(values[hoverIdx])}, new Color[]{UITheme.SUCCESS});
+            }
+            g2.dispose();
+        }
+    }
+
+    // ---------------------------------------------------------------- donut
+    private static class DonutChart extends JComponent {
+        private static final String[] NAMES = {"Cars", "Bikes", "Trucks", "EVs", "Unmatched"};
+        private static final Color[] COLORS = {UITheme.ACCENT, UITheme.WARNING, new Color(236, 72, 153), UITheme.SLOT_EV, UITheme.SLOT_MAINTENANCE};
+        private int[] data = new int[5];
+        private int hover = -1;
+
+        DonutChart() {
+            MouseAdapter m = new MouseAdapter() {
+                @Override
+                public void mouseMoved(MouseEvent e) {
+                    int i = legendAt(e.getX(), e.getY());
+                    if (i != hover) {
+                        hover = i;
+                        repaint();
+                    }
+                }
+
+                @Override
+                public void mouseExited(MouseEvent e) {
+                    hover = -1;
+                    repaint();
+                }
+            };
+            addMouseListener(m);
+            addMouseMotionListener(m);
+        }
+
+        void setData(int[] d) {
+            this.data = d;
+            repaint();
+        }
+
+        private int ringSize() {
+            return Math.max(90, Math.min(getHeight() - 4, Math.min(150, (int) (getWidth() * 0.42))));
+        }
+
+        private int legendAt(int x, int y) {
+            int lx = ringSize() + 24;
+            if (x < lx) return -1;
+            int row = (y - legendTop()) / 28;
+            int visible = 0;
+            for (int i = 0; i < data.length; i++) {
+                if (i == 4 && data[4] == 0) continue;
+                if (visible == row) return i;
+                visible++;
+            }
+            return -1;
+        }
+
+        private int legendTop() {
+            int rows = data[4] > 0 ? 5 : 4;
+            return Math.max(0, (getHeight() - rows * 28) / 2);
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = ChartCanvas.prep(g);
+            int total = 0;
+            for (int v : data) total += v;
+            int s = ringSize();
+            int x = 4, y = (getHeight() - s) / 2;
+            float stroke = 16f;
+            Arc2D.Float base = new Arc2D.Float(x + stroke / 2, y + stroke / 2, s - stroke, s - stroke, 0, 360, Arc2D.OPEN);
+            g2.setStroke(new BasicStroke(stroke, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER));
+            g2.setColor(UITheme.BG_ELEVATED);
+            g2.draw(base);
+            if (total > 0) {
+                double start = 90;
+                int nonZero = 0;
+                for (int v : data) if (v > 0) nonZero++;
+                double gap = nonZero > 1 ? 2.5 : 0;
+                for (int i = 0; i < data.length; i++) {
+                    if (data[i] == 0) continue;
+                    double ext = data[i] * 360.0 / total;
+                    g2.setStroke(new BasicStroke(hover == i ? stroke + 4 : stroke, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER));
+                    g2.setColor(hover >= 0 && hover != i ? UITheme.blend(COLORS[i], UITheme.BG_CARD, 0.45) : COLORS[i]);
+                    g2.draw(new Arc2D.Double(x + stroke / 2, y + stroke / 2, s - stroke, s - stroke, start - gap / 2, -(ext - gap), Arc2D.OPEN));
+                    start -= ext;
+                }
+            }
+            // centre
+            String num = hover >= 0 ? String.valueOf(data[hover]) : String.valueOf(total);
+            String cap = hover >= 0 ? NAMES[hover] : "parked now";
+            g2.setFont(UITheme.font(Font.BOLD, 26));
+            FontMetrics nm = g2.getFontMetrics();
+            g2.setColor(UITheme.TEXT_PRIMARY);
+            g2.drawString(num, x + (s - nm.stringWidth(num)) / 2, y + s / 2 + 6);
+            g2.setFont(UITheme.font(Font.PLAIN, 11));
+            FontMetrics cm = g2.getFontMetrics();
+            g2.setColor(UITheme.TEXT_SECONDARY);
+            g2.drawString(cap, x + (s - cm.stringWidth(cap)) / 2, y + s / 2 + 24);
+
+            // legend
+            int lx = s + 24, ly = legendTop();
+            int lw = getWidth() - lx;
+            Font lf = UITheme.font(Font.PLAIN, 12), vf = UITheme.font(Font.BOLD, 12);
+            for (int i = 0; i < data.length; i++) {
+                if (i == 4 && data[4] == 0) continue;
+                int cy = ly + 14;
+                if (hover == i) {
+                    g2.setColor(UITheme.BG_ELEVATED);
+                    g2.fillRoundRect(lx - 6, ly + 1, lw + 6, 26, 6, 6);
+                }
+                g2.setColor(COLORS[i]);
+                g2.fillRoundRect(lx, cy - 4, 8, 8, 3, 3);
+                g2.setFont(lf);
+                g2.setColor(UITheme.TEXT_BODY);
+                g2.drawString(NAMES[i], lx + 16, cy + 4);
+                String v = String.valueOf(data[i]);
+                String pc = total > 0 ? Math.round(data[i] * 100.0 / total) + "%" : "0%";
+                g2.setFont(lf);
+                FontMetrics pm = g2.getFontMetrics();
+                g2.setColor(UITheme.TEXT_TERTIARY);
+                g2.drawString(pc, lx + lw - 6 - pm.stringWidth(pc), cy + 4);
+                g2.setFont(vf);
+                g2.setColor(UITheme.TEXT_PRIMARY);
+                g2.drawString(v, lx + lw - 6 - 40 - g2.getFontMetrics().stringWidth(v), cy + 4);
+                ly += 28;
+            }
+            if (total == 0) {
+                g2.setFont(UITheme.font(Font.PLAIN, 11));
+                g2.setColor(UITheme.TEXT_TERTIARY);
+                g2.drawString("No vehicles currently parked", lx, ly + 16);
+            }
+            g2.dispose();
         }
     }
 }

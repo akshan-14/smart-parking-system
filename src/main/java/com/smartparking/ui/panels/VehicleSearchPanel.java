@@ -66,21 +66,15 @@ public class VehicleSearchPanel extends JPanel {
 
         setLayout(new BorderLayout(0, 16));
         setBackground(UITheme.BG_CANVAS);
-        setBorder(BorderFactory.createEmptyBorder(20, 24, 20, 24));
+        setBorder(BorderFactory.createEmptyBorder(24, 28, 24, 28));
 
         initUI();
     }
 
     private void initUI() {
         // --- TOP: Title ---
-        JPanel header = new JPanel(new BorderLayout());
-        header.setOpaque(false);
-        JLabel title = new JLabel("FIND VEHICLE BY REGISTRATION / PLATE NUMBER",
-                VectorIconUtil.getIcon(VectorIconUtil.IconType.SEARCH, 22, UITheme.TEXT_DARK), SwingConstants.LEFT);
-        title.setFont(UITheme.FONT_TITLE);
-        title.setForeground(UITheme.TEXT_DARK);
-        header.add(title, BorderLayout.WEST);
-        add(header, BorderLayout.NORTH);
+        add(new com.smartparking.ui.components.PageHeader("Find vehicle",
+                "Search parked vehicles by full or partial licence plate"), BorderLayout.NORTH);
 
         // --- CENTER: Search Form & Result ---
         JPanel center = new JPanel();
@@ -89,24 +83,27 @@ public class VehicleSearchPanel extends JPanel {
 
         // 1. Search Bar Card
         RoundedPanel searchCard = new RoundedPanel(14, UITheme.BG_CARD, UITheme.BORDER_LIGHT);
-        searchCard.setLayout(new FlowLayout(FlowLayout.LEFT, 16, 14));
-        searchCard.setMaximumSize(new Dimension(900, 75));
+        searchCard.setLayout(new BorderLayout(10, 0));
+        searchCard.setBorder(BorderFactory.createEmptyBorder(14, 16, 14, 16));
+        searchCard.setMaximumSize(new Dimension(Integer.MAX_VALUE, 70));
+        searchCard.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        JLabel queryLbl = new JLabel("Enter License Plate or Partial Digits:");
-        queryLbl.setFont(UITheme.FONT_BOLD);
-        searchCard.add(queryLbl);
+        JLabel queryLbl = new JLabel(VectorIconUtil.getIcon(VectorIconUtil.IconType.SEARCH, 16, UITheme.TEXT_TERTIARY));
+        searchCard.add(queryLbl, BorderLayout.WEST);
 
         searchField = new JTextField(18);
+        searchField.setToolTipText("Full or partial plate, e.g. UP32 or AB1234");
+        searchField.getAccessibleContext().setAccessibleName("Licence plate search");
         searchField.setText("UP32");
         UITheme.styleTextField(searchField);
+        searchField.setFont(UITheme.font(Font.PLAIN, 14));
         searchField.addActionListener(e -> executeSearch());
-        searchCard.add(searchField);
+        searchCard.add(searchField, BorderLayout.CENTER);
 
-        ModernButton btnSearch = new ModernButton("Search Vehicle",
-                VectorIconUtil.getIcon(VectorIconUtil.IconType.SEARCH, 16, Color.WHITE),
-                UITheme.PRIMARY_BLUE, UITheme.PRIMARY_HOVER, Color.WHITE);
+        ModernButton btnSearch = new ModernButton("Search", null);
+        btnSearch.setPreferredSize(new Dimension(120, 40));
         btnSearch.addActionListener(e -> executeSearch());
-        searchCard.add(btnSearch);
+        searchCard.add(btnSearch, BorderLayout.EAST);
 
         center.add(searchCard);
         center.add(Box.createVerticalStrut(14));
@@ -115,16 +112,17 @@ public class VehicleSearchPanel extends JPanel {
         emptyStatePanel = new RoundedPanel(14, UITheme.BG_CARD, UITheme.BORDER_LIGHT);
         emptyStatePanel.setLayout(new BoxLayout(emptyStatePanel, BoxLayout.Y_AXIS));
         emptyStatePanel.setBorder(BorderFactory.createEmptyBorder(28, 20, 28, 20));
-        emptyStatePanel.setMaximumSize(new Dimension(900, 140));
+        emptyStatePanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 160));
+        emptyStatePanel.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        JLabel emptyIcon = new JLabel(VectorIconUtil.getIcon(VectorIconUtil.IconType.SEARCH, 36, new Color(148, 163, 184)));
+        JLabel emptyIcon = new JLabel(VectorIconUtil.getIcon(VectorIconUtil.IconType.SEARCH, 36, UITheme.TEXT_TERTIARY));
         emptyIcon.setAlignmentX(Component.CENTER_ALIGNMENT);
         emptyStatePanel.add(emptyIcon);
         emptyStatePanel.add(Box.createVerticalStrut(10));
 
         emptyStateMsg = new JLabel("Enter a full or partial plate number (e.g. UP32 or AB1234) to locate your vehicle.");
-        emptyStateMsg.setFont(new Font("Segoe UI", Font.PLAIN, 13));
-        emptyStateMsg.setForeground(new Color(100, 116, 139));
+        emptyStateMsg.setFont(UITheme.font(Font.PLAIN, 13));
+        emptyStateMsg.setForeground(UITheme.TEXT_SECONDARY);
         emptyStateMsg.setAlignmentX(Component.CENTER_ALIGNMENT);
         emptyStatePanel.add(emptyStateMsg);
 
@@ -150,7 +148,7 @@ public class VehicleSearchPanel extends JPanel {
         };
 
         JTable matchesTable = new JTable(matchesTableModel);
-        matchesTable.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        matchesTable.setFont(UITheme.font(Font.PLAIN, 12));
         matchesTable.setRowHeight(28);
         matchesTable.setShowGrid(false);
         matchesTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
@@ -164,8 +162,8 @@ public class VehicleSearchPanel extends JPanel {
         });
 
         JScrollPane scrollPane = new JScrollPane(matchesTable);
-        scrollPane.setBorder(BorderFactory.createLineBorder(new Color(226, 232, 240)));
-        scrollPane.getViewport().setBackground(Color.WHITE);
+        scrollPane.setBorder(BorderFactory.createLineBorder(UITheme.BORDER_SUBTLE));
+        scrollPane.getViewport().setBackground(UITheme.BG_CARD);
         tableCard.add(scrollPane, BorderLayout.CENTER);
         tableCard.setVisible(false);
 
@@ -182,8 +180,8 @@ public class VehicleSearchPanel extends JPanel {
         badgeBox.setOpaque(false);
         iconLabel = new JLabel(VectorIconUtil.getIcon(VectorIconUtil.IconType.CAR, 56, UITheme.PRIMARY_BLUE), SwingConstants.CENTER);
         typeBadgeLabel = new JLabel("Vehicle Badge", SwingConstants.CENTER);
-        typeBadgeLabel.setFont(new Font("Segoe UI", Font.BOLD, 11));
-        typeBadgeLabel.setForeground(new Color(100, 116, 139));
+        typeBadgeLabel.setFont(UITheme.font(Font.BOLD, 11));
+        typeBadgeLabel.setForeground(UITheme.TEXT_SECONDARY);
         badgeBox.add(iconLabel, BorderLayout.CENTER);
         badgeBox.add(typeBadgeLabel, BorderLayout.SOUTH);
         badgeBox.setPreferredSize(new Dimension(130, 140));
@@ -224,7 +222,7 @@ public class VehicleSearchPanel extends JPanel {
         details.add(new JLabel("Accrued Parking Fee:"));
         feeResultLabel = new JLabel("—");
         feeResultLabel.setFont(UITheme.FONT_BOLD);
-        feeResultLabel.setForeground(new Color(22, 101, 52));
+        feeResultLabel.setForeground(new Color(139, 238, 177));
         details.add(feeResultLabel);
 
         resultCard.add(details, BorderLayout.CENTER);
@@ -238,14 +236,14 @@ public class VehicleSearchPanel extends JPanel {
         btnLocateMap = new ModernButton("Show on Map \u2192",
                 VectorIconUtil.getIcon(VectorIconUtil.IconType.MAP, 14, Color.WHITE),
                 UITheme.PRIMARY_BLUE, UITheme.PRIMARY_HOVER, Color.WHITE);
-        btnLocateMap.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        btnLocateMap.setFont(UITheme.font(Font.BOLD, 12));
         btnLocateMap.setMaximumSize(new Dimension(210, 36));
         actionBox.add(btnLocateMap);
         actionBox.add(Box.createVerticalStrut(10));
 
         btnSendDirections = ModernButton.createSecondary("Send directions to phone (Simulated)",
                 VectorIconUtil.getIcon(VectorIconUtil.IconType.PHONE, 14, UITheme.TEXT_DARK));
-        btnSendDirections.setFont(new Font("Segoe UI", Font.PLAIN, 11));
+        btnSendDirections.setFont(UITheme.font(Font.PLAIN, 11));
         btnSendDirections.setMaximumSize(new Dimension(210, 36));
         btnSendDirections.addActionListener(e -> promptSendDirections());
         actionBox.add(btnSendDirections);
@@ -272,7 +270,7 @@ public class VehicleSearchPanel extends JPanel {
             resultCard.setVisible(false);
             emptyStatePanel.setVisible(true);
             emptyStateMsg.setText("No parked vehicle found matching: \"" + rawQuery + "\". Please verify plate number or check if vehicle has already exited.");
-            emptyStateMsg.setForeground(new Color(185, 28, 28));
+            emptyStateMsg.setForeground(new Color(234, 113, 113));
             return;
         }
 

@@ -40,7 +40,7 @@ public class AlertsPanel extends JPanel {
 
         setLayout(new BorderLayout(0, 12));
         setBackground(UITheme.BG_CANVAS);
-        setBorder(BorderFactory.createEmptyBorder(16, 20, 16, 20));
+        setBorder(BorderFactory.createEmptyBorder(24, 28, 24, 28));
 
         initUI();
         refreshAlerts();
@@ -60,11 +60,11 @@ public class AlertsPanel extends JPanel {
         left.setOpaque(false);
 
         JLabel title = new JLabel(I18n.get("nav.alerts"));
-        title.setFont(new Font("Segoe UI", Font.BOLD, 22));
+        title.setFont(UITheme.font(Font.BOLD, 22));
         title.setForeground(UITheme.TEXT_DARK);
 
         JLabel sub = new JLabel("Live Facility Anomaly Detection, Bay Issues, Hardware Faults & Overstay Tracking");
-        sub.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        sub.setFont(UITheme.font(Font.PLAIN, 12));
         sub.setForeground(UITheme.TEXT_MUTED);
 
         left.add(title);
@@ -77,18 +77,18 @@ public class AlertsPanel extends JPanel {
         right.setOpaque(false);
 
         countBadge = new JLabel("0 Open Alerts");
-        countBadge.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        countBadge.setForeground(new Color(220, 38, 38));
-        countBadge.setBackground(new Color(254, 226, 226));
+        countBadge.setFont(UITheme.font(Font.BOLD, 12));
+        countBadge.setForeground(new Color(232, 114, 114));
+        countBadge.setBackground(UITheme.BG_HOVER);
         countBadge.setOpaque(true);
         countBadge.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(248, 113, 113), 1, true),
+                BorderFactory.createLineBorder(new Color(121, 30, 36), 1, true),
                 BorderFactory.createEmptyBorder(4, 10, 4, 10)
         ));
 
         JButton btnScan = new JButton("Run Anomaly Scan");
-        btnScan.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        btnScan.setBackground(new Color(37, 99, 235));
+        btnScan.setFont(UITheme.font(Font.BOLD, 12));
+        btnScan.setBackground(UITheme.ACCENT);
         btnScan.setForeground(Color.WHITE);
         btnScan.setFocusPainted(false);
         btnScan.setCursor(new Cursor(Cursor.HAND_CURSOR));
@@ -106,9 +106,9 @@ public class AlertsPanel extends JPanel {
 
         // --- 2. Filter Bar ---
         JPanel filterCard = new JPanel(new FlowLayout(FlowLayout.LEFT, 14, 8));
-        filterCard.setBackground(Color.WHITE);
+        filterCard.setBackground(UITheme.BG_CARD);
         filterCard.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(226, 232, 240), 1, true),
+                BorderFactory.createLineBorder(UITheme.BORDER_SUBTLE, 1, true),
                 BorderFactory.createEmptyBorder(6, 12, 6, 12)
         ));
 
@@ -124,7 +124,7 @@ public class AlertsPanel extends JPanel {
         filterCard.add(comboStatus);
 
         JButton btnRefresh = new JButton("Refresh");
-        btnRefresh.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        btnRefresh.setFont(UITheme.font(Font.PLAIN, 12));
         btnRefresh.addActionListener(e -> refreshAlerts());
         filterCard.add(btnRefresh);
 
@@ -137,29 +137,29 @@ public class AlertsPanel extends JPanel {
 
         alertsTable = new JTable(tableModel);
         alertsTable.setRowHeight(32);
-        alertsTable.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        alertsTable.getTableHeader().setFont(new Font("Segoe UI", Font.BOLD, 12));
+        alertsTable.setFont(UITheme.font(Font.PLAIN, 12));
+        alertsTable.getTableHeader().setFont(UITheme.font(Font.BOLD, 12));
         alertsTable.getColumnModel().getColumn(1).setCellRenderer(new SeverityRenderer());
         alertsTable.getColumnModel().getColumn(6).setCellRenderer(new StatusRenderer());
 
         JScrollPane scrollPane = new JScrollPane(alertsTable);
-        scrollPane.setBorder(BorderFactory.createLineBorder(new Color(226, 232, 240), 1, true));
-        scrollPane.getViewport().setBackground(Color.WHITE);
+        scrollPane.setBorder(BorderFactory.createLineBorder(UITheme.BORDER_SUBTLE, 1, true));
+        scrollPane.getViewport().setBackground(UITheme.BG_CARD);
 
         // --- 4. Action Buttons Footer ---
         JPanel footer = new JPanel(new FlowLayout(FlowLayout.RIGHT, 12, 8));
         footer.setOpaque(false);
 
         JButton btnViewBay = new JButton("Show on Floor Map \u2192");
-        btnViewBay.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        btnViewBay.setBackground(new Color(15, 23, 42));
+        btnViewBay.setFont(UITheme.font(Font.BOLD, 12));
+        btnViewBay.setBackground(UITheme.BG_ELEVATED);
         btnViewBay.setForeground(Color.WHITE);
         btnViewBay.setFocusPainted(false);
         btnViewBay.setCursor(new Cursor(Cursor.HAND_CURSOR));
         btnViewBay.addActionListener(e -> onShowOnFloorMap());
 
         JButton btnAck = new JButton("Acknowledge");
-        btnAck.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        btnAck.setFont(UITheme.font(Font.BOLD, 12));
         btnAck.setBackground(new Color(245, 158, 11));
         btnAck.setForeground(Color.WHITE);
         btnAck.setFocusPainted(false);
@@ -167,7 +167,7 @@ public class AlertsPanel extends JPanel {
         btnAck.addActionListener(e -> onAcknowledge());
 
         JButton btnResolve = new JButton("Resolve Alert");
-        btnResolve.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        btnResolve.setFont(UITheme.font(Font.BOLD, 12));
         btnResolve.setBackground(new Color(16, 185, 129));
         btnResolve.setForeground(Color.WHITE);
         btnResolve.setFocusPainted(false);
@@ -284,14 +284,14 @@ public class AlertsPanel extends JPanel {
             lbl.setHorizontalAlignment(SwingConstants.CENTER);
             String sev = String.valueOf(value);
             if ("CRITICAL".equalsIgnoreCase(sev)) {
-                lbl.setBackground(new Color(254, 226, 226));
-                lbl.setForeground(new Color(153, 27, 27));
+                lbl.setBackground(UITheme.BG_HOVER);
+                lbl.setForeground(new Color(242, 136, 136));
             } else if ("WARNING".equalsIgnoreCase(sev)) {
-                lbl.setBackground(new Color(254, 243, 199));
-                lbl.setForeground(new Color(146, 64, 14));
+                lbl.setBackground(new Color(52, 51, 35));
+                lbl.setForeground(new Color(250, 174, 127));
             } else {
-                lbl.setBackground(new Color(224, 231, 255));
-                lbl.setForeground(new Color(55, 48, 163));
+                lbl.setBackground(UITheme.BG_HOVER);
+                lbl.setForeground(new Color(134, 129, 218));
             }
             lbl.setOpaque(true);
             return lbl;
@@ -305,14 +305,14 @@ public class AlertsPanel extends JPanel {
             lbl.setHorizontalAlignment(SwingConstants.CENTER);
             String st = String.valueOf(value);
             if ("OPEN".equalsIgnoreCase(st)) {
-                lbl.setBackground(new Color(254, 226, 226));
-                lbl.setForeground(new Color(185, 28, 28));
+                lbl.setBackground(UITheme.BG_HOVER);
+                lbl.setForeground(new Color(234, 113, 113));
             } else if ("ACKNOWLEDGED".equalsIgnoreCase(st)) {
                 lbl.setBackground(new Color(254, 240, 138));
-                lbl.setForeground(new Color(133, 77, 14));
+                lbl.setForeground(new Color(249, 192, 128));
             } else {
-                lbl.setBackground(new Color(220, 252, 231));
-                lbl.setForeground(new Color(22, 101, 52));
+                lbl.setBackground(UITheme.BG_ELEVATED);
+                lbl.setForeground(new Color(139, 238, 177));
             }
             lbl.setOpaque(true);
             return lbl;

@@ -43,7 +43,7 @@ public class AuditLogViewerPanel extends JPanel {
 
         setLayout(new BorderLayout(0, 16));
         setBackground(UITheme.BG_CANVAS);
-        setBorder(new EmptyBorder(24, 24, 24, 24));
+        setBorder(new EmptyBorder(24, 28, 24, 28));
 
         // Initialize controls before adding to UI
         userCombo = new JComboBox<>(new String[]{"ALL", "admin", "attendant1", "customer1", "SYSTEM"});
@@ -66,81 +66,92 @@ public class AuditLogViewerPanel extends JPanel {
 
         logTable = new JTable(tableModel);
         logTable.setRowHeight(32);
-        logTable.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        logTable.getTableHeader().setFont(new Font("Segoe UI", Font.BOLD, 12));
-        logTable.getTableHeader().setBackground(new Color(241, 245, 249));
-        logTable.getTableHeader().setForeground(new Color(30, 41, 59));
-        logTable.setSelectionBackground(new Color(224, 242, 254));
-        logTable.setSelectionForeground(new Color(15, 23, 42));
-        logTable.setShowGrid(true);
-        logTable.setGridColor(new Color(226, 232, 240));
-
-        // Result column badge renderer
-        logTable.getColumnModel().getColumn(10).setCellRenderer(new DefaultTableCellRenderer() {
+        logTable.setFont(UITheme.font(Font.PLAIN, 12));
+        logTable.getTableHeader().setFont(UITheme.font(Font.BOLD, 12));
+        logTable.getTableHeader().setBackground(UITheme.BG_ELEVATED);
+        logTable.getTableHeader().setForeground(UITheme.TEXT_PRIMARY);
+        logTable.setSelectionBackground(UITheme.BG_HOVER);
+        logTable.setSelectionForeground(UITheme.TEXT_PRIMARY);
+        // Result column: shared status-pill renderer
+        logTable.getColumnModel().getColumn(10).setCellRenderer(new com.smartparking.ui.components.Badge.Renderer());
+        logTable.getColumnModel().getColumn(11).setCellRenderer(new com.smartparking.ui.theme.DarkTheme.CellRenderer(SwingConstants.LEFT) {
             @Override
-            public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int col) {
-                Component c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, col);
-                String val = String.valueOf(value);
-                if ("SUCCESS".equalsIgnoreCase(val)) {
-                    setForeground(new Color(22, 101, 52));
-                } else if ("FAILURE".equalsIgnoreCase(val) || "DENIED".equalsIgnoreCase(val)) {
-                    setForeground(new Color(185, 28, 28));
-                    setFont(getFont().deriveFont(Font.BOLD));
-                } else {
-                    setForeground(new Color(30, 41, 59));
-                }
-                return c;
+            public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) {
+                super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+                setFont(UITheme.mono(Font.PLAIN, 12));
+                setForeground(UITheme.TEXT_SECONDARY);
+                return this;
             }
         });
 
         JScrollPane scrollPane = new JScrollPane(logTable);
-        scrollPane.setBorder(BorderFactory.createLineBorder(new Color(226, 232, 240)));
-        scrollPane.getViewport().setBackground(Color.WHITE);
+        scrollPane.setBorder(new com.smartparking.ui.theme.DarkTheme.RoundBorder(UITheme.BORDER_SUBTLE, UITheme.RADIUS));
+        scrollPane.getViewport().setBackground(UITheme.BG_CARD);
 
         add(scrollPane, BorderLayout.CENTER);
 
         // Bottom Pagination & Actions
         add(buildBottomBar(), BorderLayout.SOUTH);
 
-        refreshData();
+        // Load eagerly only for roles allowed to see this screen (the main window builds every panel up front;
+        // without this guard a customer sign-in threw SecurityException). refreshData() still enforces RBAC.
+        if (AccessControl.hasPermission(Permission.VIEW_AUDIT_LOG)) refreshData();
     }
 
     private JPanel buildHeader() {
-        JPanel header = new JPanel(new BorderLayout());
-        header.setOpaque(false);
+        JPanel top = new JPanel(new BorderLayout(0, 0));
+        top.setOpaque(false);
+        com.smartparking.ui.components.PageHeader header = new com.smartparking.ui.components.PageHeader(
+                "Security audit trail", "Append-only log with SHA-256 hash chaining · tampering is detectable");
 
-        JPanel titleBox = new JPanel(new GridLayout(2, 1, 0, 4));
-        titleBox.setOpaque(false);
-        JLabel title = new JLabel("System Audit & Security Logs");
-        title.setFont(new Font("Segoe UI", Font.BOLD, 22));
-        title.setForeground(new Color(15, 23, 42));
-
-        JLabel sub = new JLabel("Append-only immutable record with SHA-256 cryptographic tamper verification");
-        sub.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        sub.setForeground(new Color(100, 116, 139));
-        titleBox.add(title);
-        titleBox.add(sub);
-        header.add(titleBox, BorderLayout.WEST);
-
-        // Action Buttons: Verify Integrity + Export CSV
-        JPanel btnBox = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
-        btnBox.setOpaque(false);
-
-        ModernButton btnVerify = new ModernButton("Verify Log Integrity", null,
-                new Color(16, 185, 129), new Color(5, 150, 105), Color.WHITE);
-        btnVerify.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        ModernButton btnVerify = ModernButton.createSecondary("Verify integrity",
+                com.smartparking.ui.util.VectorIconUtil.getIcon(com.smartparking.ui.util.VectorIconUtil.IconType.SHIELD, 14, UITheme.TEXT_SECONDARY));
+        btnVerify.setToolTipText("Recompute the hash chain across every record");
         btnVerify.addActionListener(e -> verifyIntegrity());
-
-        ModernButton btnExport = new ModernButton("Export to CSV", null,
-                new Color(59, 130, 246), new Color(37, 99, 235), Color.WHITE);
-        btnExport.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        ModernButton btnExport = ModernButton.createSecondary("Export CSV",
+                com.smartparking.ui.util.VectorIconUtil.getIcon(com.smartparking.ui.util.VectorIconUtil.IconType.DOWNLOAD, 14, UITheme.TEXT_SECONDARY));
         btnExport.addActionListener(e -> exportToCsv());
+        header.addAction(btnVerify);
+        header.addAction(btnExport);
+        top.add(header, BorderLayout.NORTH);
 
-        btnBox.add(btnVerify);
-        btnBox.add(btnExport);
-        header.add(btnBox, BorderLayout.EAST);
+        // Filter bar (wires the existing filter controls to AuditLogDao.findFiltered)
+        JPanel filters = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        filters.setOpaque(false);
+        filters.add(filterLabel("User"));
+        UITheme.styleComboBox(userCombo);
+        filters.add(userCombo);
+        filters.add(Box.createHorizontalStrut(6));
+        filters.add(filterLabel("Action"));
+        UITheme.styleComboBox(actionCombo);
+        filters.add(actionCombo);
+        filters.add(Box.createHorizontalStrut(6));
+        filters.add(filterLabel("Result"));
+        UITheme.styleComboBox(resultCombo);
+        filters.add(resultCombo);
+        filters.add(Box.createHorizontalStrut(6));
+        UITheme.styleTextField(searchField);
+        searchField.setToolTipText("Search reason, entity type or entity ID (Enter to apply)");
+        searchField.getAccessibleContext().setAccessibleName("Search audit log");
+        filters.add(filterLabel("Search"));
+        filters.add(searchField);
+        java.awt.event.ActionListener apply = e -> {
+            currentPage = 1;
+            refreshData();
+        };
+        userCombo.addActionListener(apply);
+        actionCombo.addActionListener(apply);
+        resultCombo.addActionListener(apply);
+        searchField.addActionListener(apply);
+        top.add(filters, BorderLayout.SOUTH);
+        return top;
+    }
 
-        return header;
+    private static JLabel filterLabel(String t) {
+        JLabel l = new JLabel(t);
+        l.setFont(UITheme.font(Font.PLAIN, 12));
+        l.setForeground(UITheme.TEXT_SECONDARY);
+        return l;
     }
 
     private JPanel buildBottomBar() {
@@ -150,8 +161,7 @@ public class AuditLogViewerPanel extends JPanel {
         JPanel navPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
         navPanel.setOpaque(false);
 
-        JButton prevBtn = new JButton("◀ Previous");
-        prevBtn.setFont(new Font("Segoe UI", Font.PLAIN, 11));
+        ModernButton prevBtn = ModernButton.createSecondary("Previous", com.smartparking.ui.util.VectorIconUtil.getIcon(com.smartparking.ui.util.VectorIconUtil.IconType.ARROW_LEFT, 12, UITheme.TEXT_SECONDARY)).compact();
         prevBtn.addActionListener(e -> {
             if (currentPage > 1) {
                 currentPage--;
@@ -159,13 +169,15 @@ public class AuditLogViewerPanel extends JPanel {
             }
         });
 
-        JButton nextBtn = new JButton("Next ▶");
-        nextBtn.setFont(new Font("Segoe UI", Font.PLAIN, 11));
+        ModernButton nextBtn = ModernButton.createSecondary("Next", com.smartparking.ui.util.VectorIconUtil.getIcon(com.smartparking.ui.util.VectorIconUtil.IconType.ARROW_RIGHT, 12, UITheme.TEXT_SECONDARY)).compact();
+        nextBtn.setHorizontalTextPosition(SwingConstants.LEFT);
         nextBtn.addActionListener(e -> {
             currentPage++;
             refreshData();
         });
 
+        pageLabel.setFont(UITheme.font(Font.PLAIN, 12));
+        pageLabel.setForeground(UITheme.TEXT_SECONDARY);
         navPanel.add(prevBtn);
         navPanel.add(pageLabel);
         navPanel.add(nextBtn);
@@ -179,7 +191,9 @@ public class AuditLogViewerPanel extends JPanel {
 
         tableModel.setRowCount(0);
         int offset = (currentPage - 1) * pageSize;
-        List<AuditLogEntry> entries = auditLogDao.findFiltered("ALL", "ALL", "ALL", null, offset, pageSize);
+        List<AuditLogEntry> entries = auditLogDao.findFiltered(
+                (String) userCombo.getSelectedItem(), (String) actionCombo.getSelectedItem(),
+                (String) resultCombo.getSelectedItem(), searchField.getText(), offset, pageSize);
 
         for (AuditLogEntry e : entries) {
             String timeStr = DateFormat.display(e.getTimestamp());
@@ -201,19 +215,19 @@ public class AuditLogViewerPanel extends JPanel {
                     hashShort
             });
         }
-        pageLabel.setText("Page " + currentPage);
+        pageLabel.setText("Page " + currentPage + (entries.isEmpty() ? " · no matching entries" : ""));
     }
 
     private void verifyIntegrity() {
         AuditLogDao.IntegrityResult res = auditLogDao.verifyIntegrity();
         if (res.isValid()) {
             JOptionPane.showMessageDialog(this,
-                    "✔ AUDIT LOG INTEGRITY VERIFIED OK\n\n" + res.message() +
+                    "Audit log integrity verified.\n\n" + res.message() +
                             "\n\nCryptographic SHA-256 hash chaining is intact across all records.",
                     "Audit Log Verification", JOptionPane.INFORMATION_MESSAGE);
         } else {
             JOptionPane.showMessageDialog(this,
-                    "⚠ SECURITY ALERT: LOG TAMPERING DETECTED\n\n" + res.message() +
+                    "Security alert: log tampering detected.\n\n" + res.message() +
                             "\n\nAt least one record was modified or deleted outside authorized append channels.",
                     "Integrity Violation", JOptionPane.ERROR_MESSAGE);
         }
@@ -244,11 +258,9 @@ public class AuditLogViewerPanel extends JPanel {
                             e.getRowHash()
                     );
                 }
-                JOptionPane.showMessageDialog(this, "Exported " + all.size() + " log entries to: " + target.getName(),
-                        "Export Successful", JOptionPane.INFORMATION_MESSAGE);
+                com.smartparking.ui.components.Toast.success(this, "Exported " + all.size() + " log entries", target.getAbsolutePath());
             } catch (Exception ex) {
-                JOptionPane.showMessageDialog(this, "Failed to export CSV: " + ex.getMessage(),
-                        "Export Error", JOptionPane.ERROR_MESSAGE);
+                com.smartparking.ui.components.Toast.error(this, "CSV export failed", ex.getMessage());
             }
         }
     }

@@ -89,10 +89,13 @@ public class SettingsPanel extends JPanel {
 
         setLayout(new BorderLayout(0, 12));
         setBackground(UITheme.BG_CANVAS);
-        setBorder(BorderFactory.createEmptyBorder(16, 20, 16, 20));
+        setBorder(BorderFactory.createEmptyBorder(24, 28, 24, 28));
 
         initUI();
-        refreshAllData();
+        // Settings are admin-only; skip the eager load for other roles (RBAC is still enforced in SettingsService)
+        if (com.smartparking.security.AccessControl.hasPermission(com.smartparking.security.Permission.VIEW_SETTINGS)) {
+            refreshAllData();
+        }
     }
 
     private void initUI() {
@@ -105,11 +108,11 @@ public class SettingsPanel extends JPanel {
         left.setOpaque(false);
 
         JLabel title = new JLabel(I18n.get("settings.title"));
-        title.setFont(new Font("Segoe UI", Font.BOLD, 22));
+        title.setFont(UITheme.font(Font.BOLD, 22));
         title.setForeground(UITheme.TEXT_DARK);
 
         JLabel sub = new JLabel(I18n.get("settings.subtitle"));
-        sub.setFont(new Font("Segoe UI", Font.PLAIN, 13));
+        sub.setFont(UITheme.font(Font.PLAIN, 13));
         sub.setForeground(UITheme.TEXT_MUTED);
 
         left.add(title);
@@ -121,12 +124,12 @@ public class SettingsPanel extends JPanel {
         right.setOpaque(false);
 
         effectiveLabel = new JLabel("Effective from: " + DateFormat.formatIST(LocalDateTime.now()));
-        effectiveLabel.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        effectiveLabel.setForeground(new Color(22, 101, 52)); // emerald-800
-        effectiveLabel.setBackground(new Color(220, 252, 231)); // emerald-100
+        effectiveLabel.setFont(UITheme.font(Font.BOLD, 12));
+        effectiveLabel.setForeground(new Color(139, 238, 177)); // emerald-800
+        effectiveLabel.setBackground(UITheme.BG_ELEVATED); // emerald-100
         effectiveLabel.setOpaque(true);
         effectiveLabel.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(134, 239, 172), 1, true),
+                BorderFactory.createLineBorder(new Color(34, 117, 72), 1, true),
                 BorderFactory.createEmptyBorder(6, 12, 6, 12)
         ));
         right.add(effectiveLabel);
@@ -144,7 +147,7 @@ public class SettingsPanel extends JPanel {
 
         // --- 2. Main Tabbed Pane ---
         JTabbedPane tabbedPane = new JTabbedPane();
-        tabbedPane.setFont(new Font("Segoe UI", Font.BOLD, 13));
+        tabbedPane.setFont(UITheme.font(Font.BOLD, 13));
 
         tabbedPane.addTab(I18n.get("settings.tab.tariffs"), buildTariffsTab());
         tabbedPane.addTab(I18n.get("settings.tab.billing"), buildBillingTab());
@@ -162,7 +165,7 @@ public class SettingsPanel extends JPanel {
 
     private JPanel buildTariffsTab() {
         JPanel panel = new JPanel(new BorderLayout(14, 14));
-        panel.setBackground(Color.WHITE);
+        panel.setBackground(UITheme.BG_CARD);
         panel.setBorder(BorderFactory.createEmptyBorder(16, 16, 16, 16));
 
         // Table
@@ -178,7 +181,7 @@ public class SettingsPanel extends JPanel {
         tariffsTable.setFont(UITheme.FONT_REGULAR);
         tariffsTable.setRowHeight(32);
         tariffsTable.getTableHeader().setFont(UITheme.FONT_BOLD);
-        tariffsTable.getTableHeader().setBackground(new Color(241, 245, 249));
+        tariffsTable.getTableHeader().setBackground(UITheme.BG_ELEVATED);
 
         panel.add(new JScrollPane(tariffsTable), BorderLayout.CENTER);
 
@@ -216,9 +219,9 @@ public class SettingsPanel extends JPanel {
 
     private JPanel buildPreviewCard() {
         JPanel card = new JPanel(new BorderLayout(10, 8));
-        card.setBackground(new Color(248, 250, 252));
+        card.setBackground(UITheme.BG_ELEVATED);
         card.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(226, 232, 240), 1, true),
+                BorderFactory.createLineBorder(UITheme.BORDER_SUBTLE, 1, true),
                 BorderFactory.createEmptyBorder(10, 14, 10, 14)
         ));
 
@@ -226,7 +229,7 @@ public class SettingsPanel extends JPanel {
         top.setOpaque(false);
 
         JLabel lblTitle = new JLabel("Live Tariff Fee Calculator (Preview Before Saving):");
-        lblTitle.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        lblTitle.setFont(UITheme.font(Font.BOLD, 12));
         lblTitle.setForeground(UITheme.TEXT_DARK);
         top.add(lblTitle);
 
@@ -247,15 +250,15 @@ public class SettingsPanel extends JPanel {
         top.add(previewLostTicketChk);
 
         JButton btnCalc = new JButton("Recalculate Preview");
-        btnCalc.setFont(new Font("Segoe UI", Font.BOLD, 11));
+        btnCalc.setFont(UITheme.font(Font.BOLD, 11));
         btnCalc.addActionListener(e -> updatePreviewCalculation());
         top.add(btnCalc);
 
         card.add(top, BorderLayout.NORTH);
 
         previewResultLabel = new JLabel("Sample Estimated Fee: Ready to compute");
-        previewResultLabel.setFont(new Font("Segoe UI", Font.BOLD, 13));
-        previewResultLabel.setForeground(new Color(29, 78, 216));
+        previewResultLabel.setFont(UITheme.font(Font.BOLD, 13));
+        previewResultLabel.setForeground(UITheme.ACCENT_TEXT);
         previewResultLabel.setBorder(BorderFactory.createEmptyBorder(4, 2, 0, 0));
         card.add(previewResultLabel, BorderLayout.CENTER);
 
@@ -332,7 +335,7 @@ public class SettingsPanel extends JPanel {
 
     private JPanel buildBillingTab() {
         JPanel panel = new JPanel(new BorderLayout(14, 14));
-        panel.setBackground(Color.WHITE);
+        panel.setBackground(UITheme.BG_CARD);
         panel.setBorder(BorderFactory.createEmptyBorder(16, 16, 16, 16));
 
         JPanel form = new JPanel(new GridLayout(6, 2, 14, 14));
@@ -430,7 +433,7 @@ public class SettingsPanel extends JPanel {
 
     private JPanel buildTaxBusinessTab() {
         JPanel panel = new JPanel(new BorderLayout(14, 14));
-        panel.setBackground(Color.WHITE);
+        panel.setBackground(UITheme.BG_CARD);
         panel.setBorder(BorderFactory.createEmptyBorder(16, 16, 16, 16));
 
         JPanel form = new JPanel(new GridLayout(6, 2, 14, 14));
@@ -529,7 +532,7 @@ public class SettingsPanel extends JPanel {
 
     private JPanel buildPassesTab() {
         JPanel panel = new JPanel(new BorderLayout(14, 14));
-        panel.setBackground(Color.WHITE);
+        panel.setBackground(UITheme.BG_CARD);
         panel.setBorder(BorderFactory.createEmptyBorder(16, 16, 16, 16));
 
         JPanel form = new JPanel(new GridLayout(7, 2, 14, 10));
@@ -598,7 +601,7 @@ public class SettingsPanel extends JPanel {
 
     private JPanel buildSecurityTab() {
         JPanel panel = new JPanel(new BorderLayout(14, 14));
-        panel.setBackground(Color.WHITE);
+        panel.setBackground(UITheme.BG_CARD);
         panel.setBorder(BorderFactory.createEmptyBorder(16, 16, 16, 16));
 
         JPanel form = new JPanel(new GridLayout(6, 2, 14, 14));
@@ -700,7 +703,7 @@ public class SettingsPanel extends JPanel {
 
     private JPanel buildEvChargingTab() {
         JPanel panel = new JPanel(new BorderLayout(14, 14));
-        panel.setBackground(Color.WHITE);
+        panel.setBackground(UITheme.BG_CARD);
         panel.setBorder(BorderFactory.createEmptyBorder(16, 16, 16, 16));
 
         JPanel form = new JPanel(new GridLayout(5, 2, 14, 14));

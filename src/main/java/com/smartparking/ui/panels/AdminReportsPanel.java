@@ -141,7 +141,7 @@ public class AdminReportsPanel extends JPanel {
 
         setLayout(new BorderLayout(0, 14));
         setBackground(UITheme.BG_CANVAS);
-        setBorder(BorderFactory.createEmptyBorder(16, 20, 16, 20));
+        setBorder(BorderFactory.createEmptyBorder(24, 28, 24, 28));
 
         initUI();
         refreshAllData();
@@ -149,30 +149,23 @@ public class AdminReportsPanel extends JPanel {
 
     private void initUI() {
         // --- TOP: Header Title & Refresh ---
-        JPanel header = new JPanel(new BorderLayout());
-        header.setOpaque(false);
-
-        JLabel title = new JLabel("ADMIN DASHBOARD & AUDIT REPORTS",
-                VectorIconUtil.getIcon(VectorIconUtil.IconType.REPORTS, 24, UITheme.TEXT_DARK), SwingConstants.LEFT);
-        title.setFont(UITheme.FONT_TITLE);
-        title.setForeground(UITheme.TEXT_DARK);
-        header.add(title, BorderLayout.WEST);
-
-        ModernButton btnRefresh = ModernButton.createSecondary("Refresh Live Audit",
-                VectorIconUtil.getIcon(VectorIconUtil.IconType.REFRESH, 16, UITheme.TEXT_DARK));
+        com.smartparking.ui.components.PageHeader header = new com.smartparking.ui.components.PageHeader(
+                "Audit & reports", "Revenue, occupancy and GST audit trail · invoices · FASTag · backups");
+        ModernButton btnRefresh = ModernButton.createSecondary("Refresh",
+                VectorIconUtil.getIcon(VectorIconUtil.IconType.REFRESH, 14, UITheme.TEXT_SECONDARY));
         btnRefresh.addActionListener(e -> refreshAllData());
-        header.add(btnRefresh, BorderLayout.EAST);
+        header.addAction(btnRefresh);
 
         add(header, BorderLayout.NORTH);
 
         // --- CENTER: Tabbed Navigation ---
         JTabbedPane tabbedPane = new JTabbedPane();
-        tabbedPane.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        tabbedPane.setFont(UITheme.font(Font.BOLD, 12));
 
-        tabbedPane.addTab("Executive Audit & Payment Intelligence", buildExecutiveDashboardTab());
-        tabbedPane.addTab("Past Invoices & PDF Reprint", buildPastInvoicesTab());
-        tabbedPane.addTab("FASTag Accounts Management (Simulated)", buildFastagManagementTab());
-        tabbedPane.addTab("Database Backup & DPDP Retention (Admin)", buildBackupAndRetentionTab());
+        tabbedPane.addTab("Revenue audit", buildExecutiveDashboardTab());
+        tabbedPane.addTab("Invoices", buildPastInvoicesTab());
+        tabbedPane.addTab("FASTag accounts (simulated)", buildFastagManagementTab());
+        tabbedPane.addTab("Backup & data retention", buildBackupAndRetentionTab());
 
         add(tabbedPane, BorderLayout.CENTER);
     }
@@ -187,24 +180,23 @@ public class AdminReportsPanel extends JPanel {
         RoundedPanel toolbar = new RoundedPanel(12, UITheme.BG_CARD, UITheme.BORDER_LIGHT);
         toolbar.setLayout(new BorderLayout(10, 0));
         toolbar.setBorder(BorderFactory.createEmptyBorder(8, 14, 8, 14));
-        toolbar.setMaximumSize(new Dimension(Integer.MAX_VALUE, 48));
+        toolbar.setMaximumSize(new Dimension(Integer.MAX_VALUE, 56));
 
         JPanel rangeGroup = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         rangeGroup.setOpaque(false);
-        rangeGroup.add(new JLabel("AUDIT TIMELINE:"));
+        JLabel rangeLbl = new JLabel("Period");
+        rangeLbl.setFont(UITheme.font(Font.PLAIN, 12));
+        rangeLbl.setForeground(UITheme.TEXT_SECONDARY);
+        rangeGroup.add(rangeLbl);
 
         String[] ranges = {"Today", "7 Days", "30 Days", "All Time"};
-        for (String r : ranges) {
-            JButton btnR = new JButton(r);
-            btnR.setFont(new Font("Segoe UI", Font.BOLD, 11));
-            btnR.setFocusPainted(false);
-            btnR.setCursor(new Cursor(Cursor.HAND_CURSOR));
-            btnR.addActionListener(e -> {
-                activeRange = r;
-                refreshAllData();
-            });
-            rangeGroup.add(btnR);
-        }
+        int initial = java.util.Arrays.asList(ranges).indexOf(activeRange);
+        com.smartparking.ui.components.SegmentedControl rangeSwitch = new com.smartparking.ui.components.SegmentedControl(
+                ranges, Math.max(0, initial), r -> {
+                    activeRange = r;
+                    refreshAllData();
+                });
+        rangeGroup.add(rangeSwitch);
         toolbar.add(rangeGroup, BorderLayout.WEST);
 
         JPanel exportGroup = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
@@ -215,9 +207,8 @@ public class AdminReportsPanel extends JPanel {
         btnExportCsv.addActionListener(e -> exportCsv());
         exportGroup.add(btnExportCsv);
 
-        ModernButton btnExportPdf = new ModernButton("Export PDF Audit",
-                VectorIconUtil.getIcon(VectorIconUtil.IconType.PRINT, 14, Color.WHITE),
-                UITheme.PRIMARY_BLUE, UITheme.PRIMARY_HOVER, Color.WHITE);
+        ModernButton btnExportPdf = new ModernButton("Export PDF",
+                VectorIconUtil.getIcon(VectorIconUtil.IconType.PRINT, 14, Color.WHITE));
         btnExportPdf.addActionListener(e -> exportPdf());
         exportGroup.add(btnExportPdf);
 
@@ -226,18 +217,18 @@ public class AdminReportsPanel extends JPanel {
         container.add(Box.createVerticalStrut(10));
 
         // 2. 8 Top KPI Metric Cards Grid (1 row x 8 cols)
-        JPanel kpiGrid = new JPanel(new GridLayout(1, 8, 8, 0));
+        JPanel kpiGrid = new JPanel(new GridLayout(2, 4, 10, 10));
         kpiGrid.setOpaque(false);
-        kpiGrid.setMaximumSize(new Dimension(Integer.MAX_VALUE, 86));
+        kpiGrid.setMaximumSize(new Dimension(Integer.MAX_VALUE, 150));
 
-        kpiTotal = new ReportKPICard("Capacity", "150", VectorIconUtil.IconType.GRID, new Color(219, 234, 254), new Color(29, 78, 216));
-        kpiOccupied = new ReportKPICard("Occupied", "35", VectorIconUtil.IconType.CAR, new Color(254, 226, 226), new Color(185, 28, 28));
-        kpiReserved = new ReportKPICard("Reserved", "6", VectorIconUtil.IconType.CLOCK, new Color(254, 243, 199), new Color(180, 83, 9));
-        kpiMaint = new ReportKPICard("Maintenance", "3", VectorIconUtil.IconType.WRENCH, new Color(241, 245, 249), new Color(100, 116, 139));
-        kpiAvail = new ReportKPICard("Available", "106", VectorIconUtil.IconType.CHECK, new Color(220, 252, 231), new Color(22, 101, 52));
-        kpiOccPct = new ReportKPICard("Occupancy %", "23.3%", VectorIconUtil.IconType.DASHBOARD, new Color(237, 233, 254), new Color(109, 40, 217));
-        kpiTodayRev = new ReportKPICard("Today Revenue", "\u20B91,580", VectorIconUtil.IconType.PAYMENT, new Color(220, 252, 231), new Color(22, 101, 52));
-        kpiMonthRev = new ReportKPICard("Month Revenue", "\u20B942,650", VectorIconUtil.IconType.PAYMENT, new Color(219, 234, 254), new Color(29, 78, 216));
+        kpiTotal = new ReportKPICard("Capacity", "150", VectorIconUtil.IconType.GRID, UITheme.BORDER_SUBTLE, UITheme.ACCENT);
+        kpiOccupied = new ReportKPICard("Occupied", "35", VectorIconUtil.IconType.CAR, UITheme.BG_HOVER, new Color(185, 28, 28));
+        kpiReserved = new ReportKPICard("Reserved", "6", VectorIconUtil.IconType.CLOCK, new Color(52, 51, 35), new Color(180, 83, 9));
+        kpiMaint = new ReportKPICard("Maintenance", "3", VectorIconUtil.IconType.WRENCH, UITheme.BG_ELEVATED, UITheme.TEXT_SECONDARY);
+        kpiAvail = new ReportKPICard("Available", "106", VectorIconUtil.IconType.CHECK, UITheme.BG_ELEVATED, new Color(22, 101, 52));
+        kpiOccPct = new ReportKPICard("Occupancy %", "23.3%", VectorIconUtil.IconType.DASHBOARD, UITheme.BG_HOVER, new Color(109, 40, 217));
+        kpiTodayRev = new ReportKPICard("Today Revenue", "\u20B91,580", VectorIconUtil.IconType.PAYMENT, UITheme.BG_ELEVATED, new Color(22, 101, 52));
+        kpiMonthRev = new ReportKPICard("Month Revenue", "\u20B942,650", VectorIconUtil.IconType.PAYMENT, UITheme.BORDER_SUBTLE, UITheme.ACCENT);
 
         kpiGrid.add(kpiTotal);
         kpiGrid.add(kpiOccupied);
@@ -263,7 +254,7 @@ public class AdminReportsPanel extends JPanel {
 
         barFloor1 = new JProgressBar(0, 100);
         lblFloor1 = new JLabel("L1 Ground:");
-        lblFloor1.setFont(new Font("Segoe UI", Font.BOLD, 11));
+        lblFloor1.setFont(UITheme.font(Font.BOLD, 11));
         JPanel f1 = new JPanel(new BorderLayout(8, 0));
         f1.setOpaque(false);
         f1.add(lblFloor1, BorderLayout.WEST);
@@ -272,7 +263,7 @@ public class AdminReportsPanel extends JPanel {
 
         barFloor2 = new JProgressBar(0, 100);
         lblFloor2 = new JLabel("L2 EV Hub:");
-        lblFloor2.setFont(new Font("Segoe UI", Font.BOLD, 11));
+        lblFloor2.setFont(UITheme.font(Font.BOLD, 11));
         JPanel f2 = new JPanel(new BorderLayout(8, 0));
         f2.setOpaque(false);
         f2.add(lblFloor2, BorderLayout.WEST);
@@ -281,7 +272,7 @@ public class AdminReportsPanel extends JPanel {
 
         barFloor3 = new JProgressBar(0, 100);
         lblFloor3 = new JLabel("L3 Heavy/VIP:");
-        lblFloor3.setFont(new Font("Segoe UI", Font.BOLD, 11));
+        lblFloor3.setFont(UITheme.font(Font.BOLD, 11));
         JPanel f3 = new JPanel(new BorderLayout(8, 0));
         f3.setOpaque(false);
         f3.add(lblFloor3, BorderLayout.WEST);
@@ -296,20 +287,20 @@ public class AdminReportsPanel extends JPanel {
         revCard.setBorder(BorderFactory.createEmptyBorder(10, 14, 10, 14));
 
         lblRevUpi = new JLabel("UPI (QR): \u20B90");
-        lblRevUpi.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        lblRevUpi.setForeground(new Color(22, 101, 52));
+        lblRevUpi.setFont(UITheme.font(Font.BOLD, 12));
+        lblRevUpi.setForeground(UITheme.TEXT_PRIMARY);
 
         lblRevFastag = new JLabel("FASTag: \u20B90");
-        lblRevFastag.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        lblRevFastag.setForeground(new Color(29, 78, 216));
+        lblRevFastag.setFont(UITheme.font(Font.BOLD, 12));
+        lblRevFastag.setForeground(UITheme.TEXT_PRIMARY);
 
         lblRevCash = new JLabel("Cash: \u20B90");
-        lblRevCash.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        lblRevCash.setForeground(new Color(180, 83, 9));
+        lblRevCash.setFont(UITheme.font(Font.BOLD, 12));
+        lblRevCash.setForeground(UITheme.TEXT_PRIMARY);
 
         lblRevCard = new JLabel("Card: \u20B90");
-        lblRevCard.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        lblRevCard.setForeground(new Color(109, 40, 217));
+        lblRevCard.setFont(UITheme.font(Font.BOLD, 12));
+        lblRevCard.setForeground(UITheme.TEXT_PRIMARY);
 
         revCard.add(lblRevUpi);
         revCard.add(lblRevFastag);
@@ -329,7 +320,7 @@ public class AdminReportsPanel extends JPanel {
         JPanel filterBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
         filterBar.setOpaque(false);
 
-        JLabel trailTitle = new JLabel("Settled Payment Audit Trail (Full GST Breakdown)");
+        JLabel trailTitle = new JLabel("Settled payments (GST breakdown)");
         trailTitle.setFont(UITheme.FONT_SUBTITLE);
         trailTitle.setForeground(UITheme.TEXT_DARK);
         filterBar.add(trailTitle);
@@ -361,10 +352,10 @@ public class AdminReportsPanel extends JPanel {
         };
 
         txnTable = new JTable(txnTableModel);
-        txnTable.setFont(new Font("Segoe UI", Font.PLAIN, 11));
+        txnTable.setFont(UITheme.font(Font.PLAIN, 11));
         txnTable.setRowHeight(26);
-        txnTable.getTableHeader().setFont(new Font("Segoe UI", Font.BOLD, 11));
-        txnTable.getTableHeader().setBackground(new Color(241, 245, 249));
+        txnTable.getTableHeader().setFont(UITheme.font(Font.BOLD, 11));
+        txnTable.getTableHeader().setBackground(UITheme.BG_ELEVATED);
         txnTable.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
 
         int[] widths = {120, 130, 80, 80, 80, 75, 75, 75, 90, 80, 140};
@@ -386,7 +377,7 @@ public class AdminReportsPanel extends JPanel {
         paginationBar.setOpaque(false);
 
         JButton btnPrev = new JButton("<< Prev");
-        btnPrev.setFont(new Font("Segoe UI", Font.PLAIN, 10));
+        btnPrev.setFont(UITheme.font(Font.PLAIN, 10));
         btnPrev.addActionListener(e -> {
             if (currentPage > 1) {
                 currentPage--;
@@ -396,11 +387,11 @@ public class AdminReportsPanel extends JPanel {
         paginationBar.add(btnPrev);
 
         paginationLabel = new JLabel("Page 1 of 1");
-        paginationLabel.setFont(new Font("Segoe UI", Font.BOLD, 10));
+        paginationLabel.setFont(UITheme.font(Font.BOLD, 10));
         paginationBar.add(paginationLabel);
 
         JButton btnNext = new JButton("Next >>");
-        btnNext.setFont(new Font("Segoe UI", Font.PLAIN, 10));
+        btnNext.setFont(UITheme.font(Font.PLAIN, 10));
         btnNext.addActionListener(e -> {
             int maxPages = Math.max(1, (int) Math.ceil((double) filteredTransactions.size() / pageSize));
             if (currentPage < maxPages) {
@@ -461,14 +452,14 @@ public class AdminReportsPanel extends JPanel {
 
         JButton btnPreviewHtml = new JButton("View HTML Receipt",
                 VectorIconUtil.getIcon(VectorIconUtil.IconType.EYE, 14, UITheme.TEXT_DARK));
-        btnPreviewHtml.setFont(new Font("Segoe UI", Font.BOLD, 11));
+        btnPreviewHtml.setFont(UITheme.font(Font.BOLD, 11));
         btnPreviewHtml.addActionListener(e -> previewSelectedInvoiceHtml());
         rightActions.add(btnPreviewHtml);
 
         JButton btnDownloadPdf = new JButton("Download PDF (A4)",
                 VectorIconUtil.getIcon(VectorIconUtil.IconType.DOWNLOAD, 14, UITheme.TEXT_DARK));
-        btnDownloadPdf.setFont(new Font("Segoe UI", Font.BOLD, 11));
-        btnDownloadPdf.setBackground(new Color(224, 242, 254));
+        btnDownloadPdf.setFont(UITheme.font(Font.BOLD, 11));
+        btnDownloadPdf.setBackground(UITheme.BG_HOVER);
         btnDownloadPdf.addActionListener(e -> downloadSelectedInvoicePdf());
         rightActions.add(btnDownloadPdf);
 
@@ -483,10 +474,10 @@ public class AdminReportsPanel extends JPanel {
         };
 
         invoiceTable = new JTable(invoiceTableModel);
-        invoiceTable.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        invoiceTable.setFont(UITheme.font(Font.PLAIN, 12));
         invoiceTable.setRowHeight(28);
-        invoiceTable.getTableHeader().setFont(new Font("Segoe UI", Font.BOLD, 12));
-        invoiceTable.getTableHeader().setBackground(new Color(241, 245, 249));
+        invoiceTable.getTableHeader().setFont(UITheme.font(Font.BOLD, 12));
+        invoiceTable.getTableHeader().setBackground(UITheme.BG_ELEVATED);
 
         int[] invWidths = {130, 130, 100, 110, 90, 85, 95, 80, 140};
         for (int i = 0; i < invWidths.length && i < invoiceTable.getColumnCount(); i++) {
@@ -516,20 +507,20 @@ public class AdminReportsPanel extends JPanel {
 
         JButton btnTopUp = new JButton("Top Up Balance",
                 VectorIconUtil.getIcon(VectorIconUtil.IconType.PLUS, 14, UITheme.TEXT_DARK));
-        btnTopUp.setFont(new Font("Segoe UI", Font.BOLD, 11));
-        btnTopUp.setBackground(new Color(220, 252, 231));
+        btnTopUp.setFont(UITheme.font(Font.BOLD, 11));
+        btnTopUp.setBackground(UITheme.BG_ELEVATED);
         btnTopUp.addActionListener(e -> topUpFastag());
         actionBtns.add(btnTopUp);
 
         JButton btnToggleStatus = new JButton("Block / Activate Tag",
                 VectorIconUtil.getIcon(VectorIconUtil.IconType.CROSS, 14, UITheme.TEXT_DARK));
-        btnToggleStatus.setFont(new Font("Segoe UI", Font.BOLD, 11));
+        btnToggleStatus.setFont(UITheme.font(Font.BOLD, 11));
         btnToggleStatus.addActionListener(e -> toggleFastagStatus());
         actionBtns.add(btnToggleStatus);
 
         JButton btnLinkNew = new JButton("Link New Vehicle Tag",
                 VectorIconUtil.getIcon(VectorIconUtil.IconType.TICKET, 14, UITheme.TEXT_DARK));
-        btnLinkNew.setFont(new Font("Segoe UI", Font.BOLD, 11));
+        btnLinkNew.setFont(UITheme.font(Font.BOLD, 11));
         btnLinkNew.addActionListener(e -> linkNewFastag());
         actionBtns.add(btnLinkNew);
 
@@ -544,10 +535,10 @@ public class AdminReportsPanel extends JPanel {
         };
 
         fastagTable = new JTable(fastagTableModel);
-        fastagTable.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        fastagTable.setFont(UITheme.font(Font.PLAIN, 12));
         fastagTable.setRowHeight(28);
-        fastagTable.getTableHeader().setFont(new Font("Segoe UI", Font.BOLD, 12));
-        fastagTable.getTableHeader().setBackground(new Color(241, 245, 249));
+        fastagTable.getTableHeader().setFont(UITheme.font(Font.BOLD, 12));
+        fastagTable.getTableHeader().setBackground(UITheme.BG_ELEVATED);
 
         card.add(new JScrollPane(fastagTable), BorderLayout.CENTER);
         return card;
@@ -954,9 +945,9 @@ public class AdminReportsPanel extends JPanel {
 
         public ReportKPICard(String title, String initialVal, VectorIconUtil.IconType iconType, Color iconBg, Color iconFg) {
             setLayout(new FlowLayout(FlowLayout.LEFT, 6, 6));
-            setBackground(Color.WHITE);
+            setBackground(UITheme.BG_CARD);
             setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createLineBorder(new Color(226, 232, 240), 1, true),
+                    BorderFactory.createLineBorder(UITheme.BORDER_SUBTLE, 1, true),
                     BorderFactory.createEmptyBorder(2, 4, 2, 4)
             ));
 
@@ -981,12 +972,12 @@ public class AdminReportsPanel extends JPanel {
             text.setOpaque(false);
 
             JLabel tLbl = new JLabel(title);
-            tLbl.setFont(new Font("Segoe UI", Font.BOLD, 10));
-            tLbl.setForeground(new Color(100, 116, 139));
+            tLbl.setFont(UITheme.font(Font.BOLD, 10));
+            tLbl.setForeground(UITheme.TEXT_SECONDARY);
 
             valueLabel = new JLabel(initialVal);
-            valueLabel.setFont(new Font("Segoe UI", Font.BOLD, 14));
-            valueLabel.setForeground(new Color(15, 23, 42));
+            valueLabel.setFont(UITheme.font(Font.BOLD, 14));
+            valueLabel.setForeground(UITheme.TEXT_PRIMARY);
 
             text.add(tLbl);
             text.add(valueLabel);
@@ -1007,25 +998,25 @@ public class AdminReportsPanel extends JPanel {
         panel.setBorder(BorderFactory.createEmptyBorder(16, 16, 16, 16));
 
         // 1. Live Database Backup Card
-        RoundedPanel backupCard = new RoundedPanel(12, Color.WHITE);
+        RoundedPanel backupCard = new RoundedPanel(12, UITheme.BG_CARD);
         backupCard.setLayout(new BorderLayout(16, 16));
         backupCard.setBorder(BorderFactory.createEmptyBorder(16, 20, 16, 20));
 
         JPanel bHeader = new JPanel(new GridLayout(2, 1, 0, 4));
         bHeader.setOpaque(false);
         JLabel bTitle = new JLabel("Live SQLite Database Backup (WAL Point-in-Time Snapshot)");
-        bTitle.setFont(new Font("Segoe UI", Font.BOLD, 15));
-        bTitle.setForeground(new Color(15, 23, 42));
+        bTitle.setFont(UITheme.font(Font.BOLD, 15));
+        bTitle.setForeground(UITheme.TEXT_PRIMARY);
         JLabel bSub = new JLabel("Uses SQLite VACUUM INTO to capture safe live snapshots without database locking. Retains the latest 7 backups.");
-        bSub.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        bSub.setForeground(new Color(100, 116, 139));
+        bSub.setFont(UITheme.font(Font.PLAIN, 12));
+        bSub.setForeground(UITheme.TEXT_SECONDARY);
         bHeader.add(bTitle);
         bHeader.add(bSub);
         backupCard.add(bHeader, BorderLayout.CENTER);
 
         ModernButton btnBackup = new ModernButton("Backup Database Now", null,
-                new Color(37, 99, 235), new Color(29, 78, 216), Color.WHITE);
-        btnBackup.setFont(new Font("Segoe UI", Font.BOLD, 12));
+                UITheme.ACCENT, UITheme.ACCENT, Color.WHITE);
+        btnBackup.setFont(UITheme.font(Font.BOLD, 12));
         btnBackup.addActionListener(e -> {
             try {
                 File f = DatabaseBackupService.getInstance().backupDatabaseNow();
@@ -1039,25 +1030,25 @@ public class AdminReportsPanel extends JPanel {
         panel.add(Box.createVerticalStrut(16));
 
         // 2. DPDP Statutory Retention Card
-        RoundedPanel retentionCard = new RoundedPanel(12, Color.WHITE);
+        RoundedPanel retentionCard = new RoundedPanel(12, UITheme.BG_CARD);
         retentionCard.setLayout(new BorderLayout(16, 16));
         retentionCard.setBorder(BorderFactory.createEmptyBorder(16, 20, 16, 20));
 
         JPanel rHeader = new JPanel(new GridLayout(2, 1, 0, 4));
         rHeader.setOpaque(false);
         JLabel rTitle = new JLabel("DPDP Act, 2023 Statutory Data Retention & Anonymization");
-        rTitle.setFont(new Font("Segoe UI", Font.BOLD, 15));
-        rTitle.setForeground(new Color(15, 23, 42));
+        rTitle.setFont(UITheme.font(Font.BOLD, 15));
+        rTitle.setForeground(UITheme.TEXT_PRIMARY);
         JLabel rSub = new JLabel("Anonymizes tickets older than 365 days (UP00XX0000) and deletes ANPR camera snapshots older than 30 days. Invoices preserved per GST compliance.");
-        rSub.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        rSub.setForeground(new Color(100, 116, 139));
+        rSub.setFont(UITheme.font(Font.PLAIN, 12));
+        rSub.setForeground(UITheme.TEXT_SECONDARY);
         rHeader.add(rTitle);
         rHeader.add(rSub);
         retentionCard.add(rHeader, BorderLayout.CENTER);
 
         ModernButton btnRetention = new ModernButton("Run Retention Job Now", null,
                 new Color(16, 185, 129), new Color(5, 150, 105), Color.WHITE);
-        btnRetention.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        btnRetention.setFont(UITheme.font(Font.BOLD, 12));
         btnRetention.addActionListener(e -> {
             try {
                 DataRetentionService.RetentionReport report = DataRetentionService.getInstance().runRetentionJob();
@@ -1076,13 +1067,13 @@ public class AdminReportsPanel extends JPanel {
         panel.add(Box.createVerticalStrut(16));
 
         // 3. Customer Erasure Requests Card
-        RoundedPanel reqCard = new RoundedPanel(12, Color.WHITE);
+        RoundedPanel reqCard = new RoundedPanel(12, UITheme.BG_CARD);
         reqCard.setLayout(new BorderLayout(12, 12));
         reqCard.setBorder(BorderFactory.createEmptyBorder(16, 20, 16, 20));
 
         JLabel reqTitle = new JLabel("Pending DPDP Customer Erasure Requests (Section 12)");
-        reqTitle.setFont(new Font("Segoe UI", Font.BOLD, 15));
-        reqTitle.setForeground(new Color(15, 23, 42));
+        reqTitle.setFont(UITheme.font(Font.BOLD, 15));
+        reqTitle.setForeground(UITheme.TEXT_PRIMARY);
         reqCard.add(reqTitle, BorderLayout.NORTH);
 
         DefaultTableModel reqModel = new DefaultTableModel(new String[]{"Req ID", "User ID", "Username", "Mobile", "Requested At (IST)", "Status"}, 0);
@@ -1100,7 +1091,7 @@ public class AdminReportsPanel extends JPanel {
         actionB.setOpaque(false);
         ModernButton btnApprove = new ModernButton("Approve Selected Erasure Request", null,
                 new Color(239, 68, 68), new Color(220, 38, 38), Color.WHITE);
-        btnApprove.setFont(new Font("Segoe UI", Font.BOLD, 11));
+        btnApprove.setFont(UITheme.font(Font.BOLD, 11));
         btnApprove.addActionListener(e -> {
             int sel = reqTable.getSelectedRow();
             if (sel >= 0) {

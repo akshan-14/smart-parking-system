@@ -69,46 +69,63 @@ public class ReservationPanel extends JPanel {
 
         setLayout(new BorderLayout(0, 16));
         setBackground(UITheme.BG_CANVAS);
-        setBorder(BorderFactory.createEmptyBorder(16, 20, 16, 20));
+        setBorder(BorderFactory.createEmptyBorder(24, 28, 24, 28));
 
         initUI();
         refreshSuitableBays();
         refreshTable();
     }
 
+    private JLabel formError;
+    private JLabel countLabel;
+    private CardLayout tableCards;
+    private JPanel tableHolder;
+
     private void initUI() {
-        // --- TOP: Header Title & Purge Action ---
-        JPanel header = new JPanel(new BorderLayout());
-        header.setOpaque(false);
-
-        JLabel title = new JLabel("ADVANCE PARKING SLOT RESERVATIONS",
-                VectorIconUtil.getIcon(VectorIconUtil.IconType.CLOCK, 22, UITheme.TEXT_DARK), SwingConstants.LEFT);
-        title.setFont(UITheme.FONT_TITLE);
-        title.setForeground(UITheme.TEXT_DARK);
-        header.add(title, BorderLayout.WEST);
-
-        JPanel headerActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
-        headerActions.setOpaque(false);
-
-        ModernButton btnPurge = ModernButton.createSecondary("Purge No-Shows (15m Grace)",
-                VectorIconUtil.getIcon(VectorIconUtil.IconType.REFRESH, 16, UITheme.TEXT_DARK));
+        // --- Header ---
+        com.smartparking.ui.components.PageHeader header = new com.smartparking.ui.components.PageHeader(
+                "Advance booking", "Hold a bay ahead of arrival · bookings not claimed within 15 minutes are released");
+        ModernButton btnPurge = ModernButton.createSecondary("Release no-shows",
+                VectorIconUtil.getIcon(VectorIconUtil.IconType.REFRESH, 14, UITheme.TEXT_SECONDARY));
+        btnPurge.setToolTipText("Expire bookings more than 15 minutes past their start time and free the bays");
         btnPurge.addActionListener(e -> purgeExpired());
-        headerActions.add(btnPurge);
-
-        header.add(headerActions, BorderLayout.EAST);
+        header.addAction(btnPurge);
         add(header, BorderLayout.NORTH);
 
-        // --- CENTER: Form + Table Split ---
-        JPanel centerPanel = new JPanel(new BorderLayout(0, 14));
-        centerPanel.setOpaque(false);
+        JPanel center = new JPanel(new BorderLayout(16, 0));
+        center.setOpaque(false);
+        center.add(buildFormCard(), BorderLayout.WEST);
+        center.add(buildTableCard(), BorderLayout.CENTER);
+        add(center, BorderLayout.CENTER);
+    }
 
-        // 1. Booking Form Card
-        RoundedPanel formCard = new RoundedPanel(14, UITheme.BG_CARD, UITheme.BORDER_LIGHT);
-        formCard.setLayout(new FlowLayout(FlowLayout.LEFT, 14, 12));
-        formCard.setBorder(BorderFactory.createEmptyBorder(10, 14, 10, 14));
+    private static JLabel fieldLabel(String text) {
+        JLabel l = new JLabel(text);
+        l.setFont(UITheme.font(Font.BOLD, 12));
+        l.setForeground(UITheme.TEXT_BODY);
+        return l;
+    }
+
+    private JComponent buildFormCard() {
+        RoundedPanel formCard = new RoundedPanel(UITheme.RADIUS_LG, UITheme.BG_CARD, UITheme.BORDER_SUBTLE);
+        formCard.setLayout(new BorderLayout(0, 16));
+        formCard.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
+        formCard.setPreferredSize(new Dimension(340, 0));
+        formCard.add(com.smartparking.ui.components.PageHeader.cardTitle("New booking"), BorderLayout.NORTH);
+
+        JPanel form = new JPanel(new GridBagLayout());
+        form.setOpaque(false);
+        GridBagConstraints c = new GridBagConstraints();
+        c.gridx = 0;
+        c.gridy = 0;
+        c.gridwidth = 2;
+        c.weightx = 1;
+        c.fill = GridBagConstraints.HORIZONTAL;
+        c.anchor = GridBagConstraints.NORTHWEST;
 
         // Vehicle Classification
-        formCard.add(new JLabel("Vehicle:"));
+        c.insets = new Insets(0, 0, 6, 0);
+        form.add(fieldLabel("Vehicle type"), c);
         VehicleType[] supportedTypes = {
                 VehicleType.CAR,
                 VehicleType.MOTORCYCLE,
@@ -120,28 +137,54 @@ public class ReservationPanel extends JPanel {
         };
         vehicleTypeBox = new JComboBox<>(supportedTypes);
         UITheme.styleComboBox(vehicleTypeBox);
+        vehicleTypeBox.setRenderer(new DefaultListCellRenderer() {
+            @Override
+            public Component getListCellRendererComponent(JList<?> list, Object value, int index, boolean isSelected, boolean cellHasFocus) {
+                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                if (value instanceof VehicleType vt) setText(vt.getDisplayName());
+                return this;
+            }
+        });
         vehicleTypeBox.addActionListener(e -> refreshSuitableBays());
-        formCard.add(vehicleTypeBox);
+        c.gridy++;
+        c.insets = new Insets(0, 0, 14, 0);
+        form.add(vehicleTypeBox, c);
 
-        // Mini Floor Bay Picker
-        formCard.add(new JLabel("Select Bay:"));
+        // Bay picker
+        c.gridy++;
+        c.insets = new Insets(0, 0, 6, 0);
+        form.add(fieldLabel("Bay"), c);
         bayPickerBox = new JComboBox<>();
         UITheme.styleComboBox(bayPickerBox);
-        bayPickerBox.setPreferredSize(new Dimension(130, 32));
-        formCard.add(bayPickerBox);
+        bayPickerBox.setToolTipText("Only free bays that fit the selected vehicle are listed");
+        c.gridy++;
+        c.insets = new Insets(0, 0, 14, 0);
+        form.add(bayPickerBox, c);
 
         // License Plate Input
-        formCard.add(new JLabel("License Plate:"));
+        c.gridy++;
+        c.insets = new Insets(0, 0, 6, 0);
+        form.add(fieldLabel("Licence plate"), c);
+        JPanel plateRow = new JPanel(new BorderLayout(8, 0));
+        plateRow.setOpaque(false);
         plateField = new JTextField(PlateUtil.generateRandomUp(), 11);
         UITheme.styleTextField(plateField);
-        formCard.add(plateField);
-
-        JButton btnRegenPlate = new JButton(VectorIconUtil.getIcon(VectorIconUtil.IconType.DICE, 14, UITheme.TEXT_DARK));
-        btnRegenPlate.setToolTipText("Generate random valid UP plate");
-        btnRegenPlate.setPreferredSize(new Dimension(32, 32));
-        btnRegenPlate.setCursor(new Cursor(Cursor.HAND_CURSOR));
+        plateField.setFont(UITheme.mono(Font.BOLD, 14));
+        plateField.getAccessibleContext().setAccessibleName("Licence plate");
+        plateField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            public void insertUpdate(javax.swing.event.DocumentEvent e) { clearFormError(); }
+            public void removeUpdate(javax.swing.event.DocumentEvent e) { clearFormError(); }
+            public void changedUpdate(javax.swing.event.DocumentEvent e) { }
+        });
+        plateRow.add(plateField, BorderLayout.CENTER);
+        ModernButton btnRegenPlate = ModernButton.createSecondary(null, VectorIconUtil.getIcon(VectorIconUtil.IconType.DICE, 14, UITheme.TEXT_SECONDARY));
+        btnRegenPlate.setToolTipText("Generate a random valid UP plate");
+        btnRegenPlate.getAccessibleContext().setAccessibleName("Random plate");
         btnRegenPlate.addActionListener(e -> plateField.setText(PlateUtil.generateRandomUp()));
-        formCard.add(btnRegenPlate);
+        plateRow.add(btnRegenPlate, BorderLayout.EAST);
+        c.gridy++;
+        c.insets = new Insets(0, 0, 14, 0);
+        form.add(plateRow, c);
 
         // Start Date/Time (Rounded to next 15-min mark)
         LocalDateTime now = LocalDateTime.now(ZoneId.of("Asia/Kolkata"));
@@ -150,45 +193,118 @@ public class ReservationPanel extends JPanel {
         int addMin = rem == 0 ? 0 : (15 - rem);
         LocalDateTime roundedStart = now.plusMinutes(addMin);
 
-        formCard.add(new JLabel("Start Time (IST):"));
-        startHourSpinner = new JSpinner(new SpinnerNumberModel(roundedStart.getHour(), 0, 23, 1));
-        startHourSpinner.setPreferredSize(new Dimension(48, 30));
-        startMinuteSpinner = new JSpinner(new SpinnerNumberModel(roundedStart.getMinute(), 0, 45, 15));
-        startMinuteSpinner.setPreferredSize(new Dimension(48, 30));
-        formCard.add(startHourSpinner);
-        formCard.add(new JLabel(":"));
-        formCard.add(startMinuteSpinner);
+        c.gridy++;
+        c.gridwidth = 1;
+        c.insets = new Insets(0, 0, 6, 10);
+        form.add(fieldLabel("Starts (IST, today)"), c);
+        c.gridx = 1;
+        c.insets = new Insets(0, 0, 6, 0);
+        form.add(fieldLabel("Duration"), c);
 
-        // Duration Spinner (1 to 24 hours)
-        formCard.add(new JLabel("Duration:"));
+        startHourSpinner = new JSpinner(new SpinnerNumberModel(roundedStart.getHour(), 0, 23, 1));
+        startMinuteSpinner = new JSpinner(new SpinnerNumberModel(roundedStart.getMinute(), 0, 45, 15));
+        ((JSpinner.DefaultEditor) startHourSpinner.getEditor()).getTextField().setColumns(2);
+        ((JSpinner.DefaultEditor) startMinuteSpinner.getEditor()).getTextField().setColumns(2);
+        startHourSpinner.getAccessibleContext().setAccessibleName("Start hour");
+        startMinuteSpinner.getAccessibleContext().setAccessibleName("Start minute");
+        JPanel time = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        time.setOpaque(false);
+        time.add(startHourSpinner);
+        JLabel colon = new JLabel(":");
+        colon.setForeground(UITheme.TEXT_SECONDARY);
+        time.add(colon);
+        time.add(startMinuteSpinner);
+
         durationSpinner = new JSpinner(new SpinnerNumberModel(2, 1, 24, 1));
-        durationSpinner.setPreferredSize(new Dimension(50, 30));
+        ((JSpinner.DefaultEditor) durationSpinner.getEditor()).getTextField().setColumns(2);
+        durationSpinner.getAccessibleContext().setAccessibleName("Duration in hours");
+        JPanel dur = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        dur.setOpaque(false);
+        dur.add(durationSpinner);
+        JLabel hrs = new JLabel("hours");
+        hrs.setFont(UITheme.font(Font.PLAIN, 12));
+        hrs.setForeground(UITheme.TEXT_SECONDARY);
+        dur.add(hrs);
+
         durationSpinner.addChangeListener(e -> updateCalculatedEndTime());
         startHourSpinner.addChangeListener(e -> updateCalculatedEndTime());
         startMinuteSpinner.addChangeListener(e -> updateCalculatedEndTime());
-        formCard.add(durationSpinner);
-        formCard.add(new JLabel("hrs"));
+
+        c.gridy++;
+        c.gridx = 0;
+        c.insets = new Insets(0, -4, 10, 10);
+        form.add(time, c);
+        c.gridx = 1;
+        c.insets = new Insets(0, -6, 10, 0);
+        form.add(dur, c);
 
         // Calculated End Time
+        c.gridy++;
+        c.gridx = 0;
+        c.gridwidth = 2;
+        c.insets = new Insets(0, 0, 6, 0);
         calculatedEndLabel = new JLabel();
-        calculatedEndLabel.setFont(new Font("Segoe UI", Font.BOLD, 11));
-        calculatedEndLabel.setForeground(new Color(29, 78, 216));
-        formCard.add(calculatedEndLabel);
+        calculatedEndLabel.setFont(UITheme.font(Font.PLAIN, 12));
+        calculatedEndLabel.setForeground(UITheme.TEXT_SECONDARY);
+        calculatedEndLabel.setIcon(VectorIconUtil.getIcon(VectorIconUtil.IconType.CLOCK, 13, UITheme.TEXT_TERTIARY));
+        calculatedEndLabel.setIconTextGap(8);
+        form.add(calculatedEndLabel, c);
         updateCalculatedEndTime();
 
-        // Reserve Button
-        ModernButton btnBook = new ModernButton("Confirm Booking", VectorIconUtil.getIcon(VectorIconUtil.IconType.CHECK, 14, Color.WHITE),
-                UITheme.PRIMARY_BLUE, UITheme.PRIMARY_HOVER, Color.WHITE);
+        c.gridy++;
+        c.insets = new Insets(0, 0, 0, 0);
+        formError = new JLabel(" ");
+        formError.setFont(UITheme.font(Font.PLAIN, 12));
+        formError.setForeground(UITheme.ERROR_TEXT);
+        form.add(formError, c);
+
+        c.gridy++;
+        c.weighty = 1;
+        form.add(Box.createGlue(), c);
+        formCard.add(form, BorderLayout.CENTER);
+
+        ModernButton btnBook = new ModernButton("Confirm booking", VectorIconUtil.getIcon(VectorIconUtil.IconType.CHECK, 14, Color.WHITE));
+        btnBook.setPreferredSize(new Dimension(200, 42));
         btnBook.addActionListener(e -> bookReservation());
-        formCard.add(btnBook);
+        formCard.add(btnBook, BorderLayout.SOUTH);
+        return formCard;
+    }
 
-        centerPanel.add(formCard, BorderLayout.NORTH);
+    private JComponent buildTableCard() {
+        RoundedPanel card = new RoundedPanel(UITheme.RADIUS_LG, UITheme.BG_CARD, UITheme.BORDER_SUBTLE);
+        card.setLayout(new BorderLayout(0, 14));
+        card.setBorder(BorderFactory.createEmptyBorder(16, 18, 18, 18));
 
-        // 2. Table Card with Action Footer
-        JPanel tableContainer = new JPanel(new BorderLayout(0, 8));
-        tableContainer.setOpaque(false);
+        JPanel head = new JPanel(new BorderLayout(12, 0));
+        head.setOpaque(false);
+        JPanel titles = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
+        titles.setOpaque(false);
+        titles.add(com.smartparking.ui.components.PageHeader.cardTitle("Upcoming bookings"));
+        countLabel = new JLabel("0");
+        countLabel.setFont(UITheme.font(Font.BOLD, 12));
+        countLabel.setForeground(UITheme.TEXT_TERTIARY);
+        titles.add(countLabel);
+        JPanel tw = new JPanel(new GridBagLayout());
+        tw.setOpaque(false);
+        tw.add(titles);
+        head.add(tw, BorderLayout.WEST);
 
-        String[] cols = {"ID", "Code", "Slot ID", "License Plate", "Vehicle Type", "Start Time (IST)", "End Time (IST)", "Status"};
+        JPanel actionsBar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        actionsBar.setOpaque(false);
+        btnExtend = ModernButton.createSecondary("Extend +1 h", VectorIconUtil.getIcon(VectorIconUtil.IconType.CLOCK, 13, UITheme.TEXT_SECONDARY)).compact();
+        btnExtend.setToolTipText("Extend the selected booking by one hour");
+        btnExtend.setEnabled(false);
+        btnExtend.addActionListener(e -> handleExtend());
+        actionsBar.add(btnExtend);
+        btnCancel = ModernButton.createDanger("Cancel booking", null).compact();
+        btnCancel.setToolTipText("Cancel the selected booking and release its bay");
+        btnCancel.setEnabled(false);
+        btnCancel.addActionListener(e -> handleCancel());
+        actionsBar.add(btnCancel);
+        head.add(actionsBar, BorderLayout.EAST);
+        card.add(head, BorderLayout.NORTH);
+
+        String[] cols = {"ID", "Code", "Bay", "Licence plate", "Vehicle", "Starts (IST)", "Ends (IST)", "Status"};
         tableModel = new DefaultTableModel(cols, 0) {
             @Override
             public boolean isCellEditable(int row, int column) {
@@ -197,15 +313,8 @@ public class ReservationPanel extends JPanel {
         };
 
         reservationsTable = new JTable(tableModel);
-        reservationsTable.setFont(UITheme.FONT_REGULAR);
-        reservationsTable.setRowHeight(32);
-        reservationsTable.getTableHeader().setFont(UITheme.FONT_BOLD);
-        reservationsTable.getTableHeader().setBackground(new Color(241, 245, 249));
         reservationsTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-
-        // Status Column Renderer (High-Contrast Colored Pills)
-        reservationsTable.getColumnModel().getColumn(7).setCellRenderer(new StatusBadgeRenderer());
-
+        reservationsTable.getColumnModel().getColumn(7).setCellRenderer(new com.smartparking.ui.components.Badge.Renderer());
         reservationsTable.getSelectionModel().addListSelectionListener(e -> {
             boolean hasSelection = reservationsTable.getSelectedRow() >= 0;
             btnExtend.setEnabled(hasSelection);
@@ -213,29 +322,28 @@ public class ReservationPanel extends JPanel {
         });
 
         JScrollPane scroll = new JScrollPane(reservationsTable);
-        scroll.setBorder(BorderFactory.createLineBorder(UITheme.BORDER_LIGHT, 1, true));
-        tableContainer.add(scroll, BorderLayout.CENTER);
+        scroll.setBorder(new com.smartparking.ui.theme.DarkTheme.RoundBorder(UITheme.BORDER_SUBTLE, UITheme.RADIUS));
 
-        // Bottom Action Bar: Extend & Cancel
-        JPanel actionsBar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 6));
-        actionsBar.setOpaque(false);
+        tableCards = new CardLayout();
+        tableHolder = new JPanel(tableCards);
+        tableHolder.setOpaque(false);
+        tableHolder.add(scroll, "TABLE");
+        tableHolder.add(new com.smartparking.ui.components.EmptyState(VectorIconUtil.IconType.CALENDAR, "No upcoming bookings",
+                "Bookings you create appear here until the vehicle arrives or the booking expires."), "EMPTY");
+        card.add(tableHolder, BorderLayout.CENTER);
+        return card;
+    }
 
-        btnExtend = new ModernButton("Extend Reservation (+1 hr)", VectorIconUtil.getIcon(VectorIconUtil.IconType.CLOCK, 14, Color.WHITE),
-                new Color(37, 99, 235), new Color(29, 78, 216), Color.WHITE);
-        btnExtend.setEnabled(false);
-        btnExtend.addActionListener(e -> handleExtend());
-        actionsBar.add(btnExtend);
+    private void showFormError(String msg) {
+        formError.setText("<html>" + msg + "</html>");
+        formError.setIcon(VectorIconUtil.getIcon(VectorIconUtil.IconType.ALERT, 13, UITheme.ERROR_TEXT));
+    }
 
-        btnCancel = new ModernButton("Cancel Selected Booking", VectorIconUtil.getIcon(VectorIconUtil.IconType.CROSS, 14, Color.WHITE),
-                new Color(220, 38, 38), new Color(185, 28, 28), Color.WHITE);
-        btnCancel.setEnabled(false);
-        btnCancel.addActionListener(e -> handleCancel());
-        actionsBar.add(btnCancel);
-
-        tableContainer.add(actionsBar, BorderLayout.SOUTH);
-        centerPanel.add(tableContainer, BorderLayout.CENTER);
-
-        add(centerPanel, BorderLayout.CENTER);
+    private void clearFormError() {
+        if (formError != null) {
+            formError.setText(" ");
+            formError.setIcon(null);
+        }
     }
 
     private void updateCalculatedEndTime() {
@@ -247,7 +355,7 @@ public class ReservationPanel extends JPanel {
             LocalDateTime start = LocalDateTime.now(ZoneId.of("Asia/Kolkata"))
                     .withHour(h).withMinute(m).withSecond(0).withNano(0);
             LocalDateTime end = start.plusHours(dur);
-            calculatedEndLabel.setText("Ends: " + end.format(DateTimeFormatter.ofPattern("HH:mm (dd MMM)")));
+            calculatedEndLabel.setText("Ends at " + end.format(DateTimeFormatter.ofPattern("HH:mm, dd MMM")));
         } catch (Exception ignored) {
             calculatedEndLabel.setText("");
         }
@@ -261,12 +369,12 @@ public class ReservationPanel extends JPanel {
         List<String> suitableBays = new ArrayList<>();
         for (ParkingSlot s : allSlots) {
             if (s.isAvailable() && (selectedType == null || s.canFitVehicle(selectedType))) {
-                suitableBays.add(s.getSlotId() + " (Floor " + s.getFloorNumber() + ")");
+                suitableBays.add(s.getSlotId() + "  ·  Level " + s.getFloorNumber());
             }
         }
 
         if (suitableBays.isEmpty()) {
-            bayPickerBox.addItem("No slots available");
+            bayPickerBox.addItem("No free bays for this vehicle");
             bayPickerBox.setEnabled(false);
         } else {
             bayPickerBox.setEnabled(true);
@@ -278,8 +386,8 @@ public class ReservationPanel extends JPanel {
 
     private void bookReservation() {
         String selectedBayItem = (String) bayPickerBox.getSelectedItem();
-        if (selectedBayItem == null || selectedBayItem.startsWith("No slots")) {
-            JOptionPane.showMessageDialog(this, "Please select an available parking bay.", "Validation", JOptionPane.WARNING_MESSAGE);
+        if (selectedBayItem == null || selectedBayItem.startsWith("No free bays")) {
+            showFormError("Choose a free bay for this vehicle.");
             return;
         }
 
@@ -291,14 +399,14 @@ public class ReservationPanel extends JPanel {
         int m = (Integer) startMinuteSpinner.getValue();
 
         if (plate.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "Please enter a vehicle license plate number.", "Validation", JOptionPane.WARNING_MESSAGE);
+            showFormError("Enter the vehicle's licence plate.");
+            plateField.requestFocusInWindow();
             return;
         }
 
         if (!PlateUtil.isValid(plate)) {
-            JOptionPane.showMessageDialog(this,
-                    "Invalid plate format. Please enter a valid Uttar Pradesh (UP) or Bharat (BH) plate.\nExample: UP32AB1234 or 22BH1234AA",
-                    "Invalid Plate", JOptionPane.WARNING_MESSAGE);
+            showFormError("Enter a valid UP or Bharat (BH) plate, e.g. UP32AB1234 or 22BH1234AA.");
+            plateField.requestFocusInWindow();
             return;
         }
 
@@ -306,13 +414,13 @@ public class ReservationPanel extends JPanel {
                 .withHour(h).withMinute(m).withSecond(0).withNano(0);
         LocalDateTime now = LocalDateTime.now(ZoneId.of("Asia/Kolkata"));
         if (start.isBefore(now.minusMinutes(2))) {
-            JOptionPane.showMessageDialog(this, "Start time cannot be in the past.", "Validation", JOptionPane.WARNING_MESSAGE);
+            showFormError("The start time can't be in the past.");
             return;
         }
 
         Optional<ParkingSlot> sOpt = slotDao.findById(slotId);
         if (sOpt.isPresent() && vType != null && !sOpt.get().canFitVehicle(vType)) {
-            JOptionPane.showMessageDialog(this, "Bay " + slotId + " is not suitable for vehicle type " + vType.name() + ".", "Slot Suitability", JOptionPane.WARNING_MESSAGE);
+            showFormError("Bay " + slotId + " doesn't fit a " + vType.getDisplayName() + ".");
             return;
         }
 
@@ -320,6 +428,7 @@ public class ReservationPanel extends JPanel {
 
         try {
             Reservation res = reservationService.makeReservation(1, slotId, plate, vType, start, end);
+            clearFormError();
             showConfirmationCard(res);
 
             plateField.setText(PlateUtil.generateRandomUp());
@@ -329,7 +438,7 @@ public class ReservationPanel extends JPanel {
                 onStateChange.run();
             }
         } catch (Exception ex) {
-            JOptionPane.showMessageDialog(this, ex.getMessage(), "Reservation Error", JOptionPane.ERROR_MESSAGE);
+            showFormError(ex.getMessage());
         }
     }
 
@@ -349,12 +458,13 @@ public class ReservationPanel extends JPanel {
 
         JPanel content = new JPanel();
         content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
-        content.setBackground(Color.WHITE);
+        content.setBackground(UITheme.BG_CARD);
         content.setBorder(BorderFactory.createEmptyBorder(20, 24, 20, 24));
 
-        JLabel title = new JLabel("PARKING RESERVATION CONFIRMED");
-        title.setFont(new Font("Segoe UI", Font.BOLD, 15));
-        title.setForeground(new Color(22, 101, 52));
+        JLabel title = new JLabel("Booking confirmed", VectorIconUtil.getIcon(VectorIconUtil.IconType.CHECK, 16, UITheme.SUCCESS_TEXT), SwingConstants.CENTER);
+        title.setIconTextGap(8);
+        title.setFont(UITheme.font(Font.BOLD, 17));
+        title.setForeground(UITheme.TEXT_PRIMARY);
         title.setAlignmentX(Component.CENTER_ALIGNMENT);
         content.add(title);
         content.add(Box.createVerticalStrut(12));
@@ -362,6 +472,9 @@ public class ReservationPanel extends JPanel {
         // ZXing QR Code
         BufferedImage qrImg = BarcodeGenerator.generateQrCode("RES:" + res.getReservationCode() + ":" + res.getSlotId(), 130);
         JLabel qrLabel = new JLabel(new ImageIcon(qrImg));
+        qrLabel.setOpaque(true);
+        qrLabel.setBackground(Color.WHITE);
+        qrLabel.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6));
         qrLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
         content.add(qrLabel);
         content.add(Box.createVerticalStrut(14));
@@ -371,28 +484,28 @@ public class ReservationPanel extends JPanel {
         grid.setOpaque(false);
         grid.setMaximumSize(new Dimension(360, 160));
 
-        grid.add(new JLabel("Booking Code:"));
+        grid.add(muted("Booking code"));
         JLabel codeLbl = new JLabel(res.getReservationCode());
-        codeLbl.setFont(new Font("Consolas", Font.BOLD, 13));
-        codeLbl.setForeground(new Color(29, 78, 216));
+        codeLbl.setFont(UITheme.mono(Font.BOLD, 13));
+        codeLbl.setForeground(UITheme.ACCENT_TEXT);
         grid.add(codeLbl);
 
-        grid.add(new JLabel("Allocated Bay:"));
+        grid.add(muted("Bay"));
         JLabel bayLbl = new JLabel(res.getSlotId());
-        bayLbl.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        bayLbl.setFont(UITheme.font(Font.BOLD, 12));
         grid.add(bayLbl);
 
-        grid.add(new JLabel("Vehicle:"));
-        grid.add(new JLabel(res.getVehicleType().name()));
+        grid.add(muted("Vehicle"));
+        grid.add(strong(res.getVehicleType().getDisplayName()));
 
-        grid.add(new JLabel("License Plate:"));
-        grid.add(new JLabel(PlateUtil.format(res.getLicensePlate())));
+        grid.add(muted("Licence plate"));
+        grid.add(strong(PlateUtil.format(res.getLicensePlate())));
 
-        grid.add(new JLabel("Start Window:"));
-        grid.add(new JLabel(DateFormat.display(res.getStartTime())));
+        grid.add(muted("Starts"));
+        grid.add(strong(DateFormat.display(res.getStartTime())));
 
-        grid.add(new JLabel("Valid Until:"));
-        grid.add(new JLabel(DateFormat.display(res.getEndTime())));
+        grid.add(muted("Valid until"));
+        grid.add(strong(DateFormat.display(res.getEndTime())));
 
         content.add(grid);
         content.add(Box.createVerticalStrut(16));
@@ -401,18 +514,32 @@ public class ReservationPanel extends JPanel {
         JPanel footer = new JPanel(new FlowLayout(FlowLayout.CENTER, 10, 0));
         footer.setOpaque(false);
 
-        ModernButton btnPrint = new ModernButton("Print Slip", VectorIconUtil.getIcon(VectorIconUtil.IconType.PRINT, 14, Color.WHITE),
-                new Color(30, 41, 59), new Color(15, 23, 42), Color.WHITE);
-        btnPrint.addActionListener(e -> JOptionPane.showMessageDialog(dialog, "Reservation pass sent to receipt printer.", "Print", JOptionPane.INFORMATION_MESSAGE));
+        ModernButton btnPrint = ModernButton.createSecondary("Print slip (simulated)", VectorIconUtil.getIcon(VectorIconUtil.IconType.PRINT, 14, UITheme.TEXT_SECONDARY));
+        btnPrint.addActionListener(e -> com.smartparking.ui.components.Toast.success(dialog, "Booking slip sent to the printer (simulated)", res.getReservationCode()));
         footer.add(btnPrint);
 
-        ModernButton btnClose = ModernButton.createSecondary("Close (Esc)", null);
+        ModernButton btnClose = new ModernButton("Done", null);
+        dialog.getRootPane().setDefaultButton(btnClose);
         btnClose.addActionListener(e -> dialog.dispose());
         footer.add(btnClose);
 
         content.add(footer);
         dialog.add(content);
         dialog.setVisible(true);
+    }
+
+    private static JLabel muted(String t) {
+        JLabel l = new JLabel(t);
+        l.setFont(UITheme.font(Font.PLAIN, 13));
+        l.setForeground(UITheme.TEXT_SECONDARY);
+        return l;
+    }
+
+    private static JLabel strong(String t) {
+        JLabel l = new JLabel(t);
+        l.setFont(UITheme.font(Font.BOLD, 13));
+        l.setForeground(UITheme.TEXT_PRIMARY);
+        return l;
     }
 
     private void handleExtend() {
@@ -423,12 +550,12 @@ public class ReservationPanel extends JPanel {
         try {
             boolean extended = reservationService.extendReservation(code, 1);
             if (extended) {
-                JOptionPane.showMessageDialog(this, "Reservation " + code + " extended by 1 hour.", "Extended", JOptionPane.INFORMATION_MESSAGE);
+                com.smartparking.ui.components.Toast.success(this, "Booking extended by 1 hour", code);
                 refreshTable();
                 if (onStateChange != null) onStateChange.run();
             }
         } catch (Exception ex) {
-            JOptionPane.showMessageDialog(this, ex.getMessage(), "Cannot Extend", JOptionPane.ERROR_MESSAGE);
+            com.smartparking.ui.components.Toast.error(this, "Couldn't extend booking", ex.getMessage());
         }
     }
 
@@ -438,13 +565,13 @@ public class ReservationPanel extends JPanel {
 
         String code = (String) tableModel.getValueAt(row, 1);
         int confirm = JOptionPane.showConfirmDialog(this,
-                "Are you sure you want to cancel reservation " + code + "?\nThe bay will be immediately released.",
-                "Confirm Cancellation", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+                "Cancel booking " + code + "?\nThe bay is released immediately. This can't be undone.",
+                "Cancel booking", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
 
         if (confirm == JOptionPane.YES_OPTION) {
             boolean ok = reservationService.cancelReservation(code);
             if (ok) {
-                JOptionPane.showMessageDialog(this, "Reservation cancelled and bay released.", "Cancelled", JOptionPane.INFORMATION_MESSAGE);
+                com.smartparking.ui.components.Toast.success(this, "Booking cancelled", code + " · bay released");
                 refreshSuitableBays();
                 refreshTable();
                 if (onStateChange != null) onStateChange.run();
@@ -454,9 +581,11 @@ public class ReservationPanel extends JPanel {
 
     private void purgeExpired() {
         int purged = reservationService.purgeExpiredReservations(15);
-        JOptionPane.showMessageDialog(this,
-                "Audit complete: Purged " + purged + " overdue no-shows past the 15-minute grace period.",
-                "Purge Complete", JOptionPane.INFORMATION_MESSAGE);
+        if (purged > 0) {
+            com.smartparking.ui.components.Toast.success(this, purged + (purged == 1 ? " no-show released" : " no-shows released"), "Bays are free again");
+        } else {
+            com.smartparking.ui.components.Toast.info(this, "No no-shows to release", "Every booking is within its 15-minute grace period");
+        }
         refreshSuitableBays();
         refreshTable();
         if (onStateChange != null) {
@@ -472,13 +601,15 @@ public class ReservationPanel extends JPanel {
                     r.getReservationId(),
                     r.getReservationCode(),
                     r.getSlotId(),
-                    PlateUtil.format(r.getLicensePlate()) + " [" + PlateUtil.district(r.getLicensePlate()) + "]",
-                    r.getVehicleType(),
+                    PlateUtil.format(r.getLicensePlate()) + "  ·  " + PlateUtil.district(r.getLicensePlate()),
+                    r.getVehicleType() != null ? r.getVehicleType().getDisplayName() : "—",
                     DateFormat.display(r.getStartTime()),
                     DateFormat.display(r.getEndTime()),
                     r.getStatus().name()
             });
         }
+        if (countLabel != null) countLabel.setText(String.valueOf(list.size()));
+        if (tableCards != null) tableCards.show(tableHolder, list.isEmpty() ? "EMPTY" : "TABLE");
     }
 
     /**
@@ -487,7 +618,7 @@ public class ReservationPanel extends JPanel {
     private static class StatusBadgeRenderer extends DefaultTableCellRenderer {
         public StatusBadgeRenderer() {
             setHorizontalAlignment(SwingConstants.CENTER);
-            setFont(new Font("Segoe UI", Font.BOLD, 11));
+            setFont(UITheme.font(Font.BOLD, 11));
             setOpaque(true);
         }
 
@@ -499,24 +630,24 @@ public class ReservationPanel extends JPanel {
 
             switch (status) {
                 case "CONFIRMED" -> {
-                    setBackground(new Color(220, 252, 231)); // emerald-100
-                    setForeground(new Color(22, 101, 52));   // emerald-800
+                    setBackground(UITheme.BG_ELEVATED); // emerald-100
+                    setForeground(new Color(139, 238, 177));   // emerald-800
                 }
                 case "CHECKED_IN" -> {
-                    setBackground(new Color(219, 234, 254)); // blue-100
-                    setForeground(new Color(30, 64, 175));   // blue-800
+                    setBackground(UITheme.BG_HOVER); // blue-100
+                    setForeground(UITheme.ACCENT_TEXT);   // blue-800
                 }
                 case "CANCELLED" -> {
-                    setBackground(new Color(254, 226, 226)); // red-100
-                    setForeground(new Color(153, 27, 27));   // red-800
+                    setBackground(UITheme.BG_HOVER); // red-100
+                    setForeground(new Color(242, 136, 136));   // red-800
                 }
                 case "EXPIRED" -> {
-                    setBackground(new Color(254, 243, 199)); // amber-100
-                    setForeground(new Color(146, 64, 14));   // amber-800
+                    setBackground(new Color(52, 51, 35)); // amber-100
+                    setForeground(new Color(250, 174, 127));   // amber-800
                 }
                 default -> {
-                    setBackground(new Color(241, 245, 249));
-                    setForeground(new Color(51, 65, 85));
+                    setBackground(UITheme.BG_ELEVATED);
+                    setForeground(UITheme.TEXT_BODY);
                 }
             }
             setBorder(BorderFactory.createEmptyBorder(2, 8, 2, 8));

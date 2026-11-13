@@ -165,7 +165,7 @@ public class NotificationService {
                 return null;
             }
 
-            boolean hasConsent = consentService.hasConsent(userId, "NOTIFICATIONS");
+            boolean hasConsent = consentService.hasValidConsent(String.valueOf(userId), "NOTIFICATIONS");
             if (!hasConsent) {
                 auditLogService.log("NOTIFICATION_SUPPRESSED", "USER", String.valueOf(userId),
                         channelName, "NO_CONSENT", "Customer has withdrawn DPDP notification consent", "SUCCESS");

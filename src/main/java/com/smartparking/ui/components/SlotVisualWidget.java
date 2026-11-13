@@ -79,16 +79,16 @@ public class SlotVisualWidget extends JPanel {
 
         if ("OCCUPIED".equalsIgnoreCase(status)) {
             statusColor = UITheme.COLOR_OCCUPIED;
-            bgLight = new Color(254, 242, 242);
+            bgLight = UITheme.BG_ELEVATED;
         } else if ("RESERVED".equalsIgnoreCase(status)) {
             statusColor = UITheme.COLOR_RESERVED;
-            bgLight = new Color(254, 243, 199);
+            bgLight = new Color(52, 51, 35);
         } else if ("OUT_OF_SERVICE".equalsIgnoreCase(status)) {
             statusColor = UITheme.COLOR_MAINTENANCE;
-            bgLight = new Color(243, 244, 246);
+            bgLight = UITheme.BG_ELEVATED;
         } else {
             statusColor = UITheme.COLOR_AVAILABLE;
-            bgLight = new Color(236, 253, 245);
+            bgLight = UITheme.BG_ELEVATED;
         }
 
         // Fill parking bay background
@@ -107,12 +107,12 @@ public class SlotVisualWidget extends JPanel {
 
         // Slot ID Text
         g2.setColor(Color.WHITE);
-        g2.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        g2.setFont(UITheme.font(Font.BOLD, 12));
         g2.drawString(slot.getSlotId(), 8, 18);
 
         // Slot Type Pill on Top Right
         String typeLabel = slot.getSlotType().name().substring(0, Math.min(3, slot.getSlotType().name().length()));
-        g2.setFont(new Font("Segoe UI", Font.BOLD, 10));
+        g2.setFont(UITheme.font(Font.BOLD, 10));
         FontMetrics fm = g2.getFontMetrics();
         int typeX = w - fm.stringWidth(typeLabel) - 10;
         g2.drawString(typeLabel, typeX, 18);
@@ -126,7 +126,7 @@ public class SlotVisualWidget extends JPanel {
             }
             // License Plate
             g2.setColor(UITheme.TEXT_DARK);
-            g2.setFont(new Font("Segoe UI", Font.BOLD, 11));
+            g2.setFont(UITheme.font(Font.BOLD, 11));
             String plate = slot.getCurrentVehicle().getLicensePlate();
             FontMetrics pFm = g2.getFontMetrics();
             g2.drawString(plate, (w - pFm.stringWidth(plate)) / 2, h - 14);
@@ -138,7 +138,7 @@ public class SlotVisualWidget extends JPanel {
             }
 
             g2.setColor(statusColor.darker());
-            g2.setFont(new Font("Segoe UI", Font.BOLD, 11));
+            g2.setFont(UITheme.font(Font.BOLD, 11));
             FontMetrics sFm = g2.getFontMetrics();
             g2.drawString(status, (w - sFm.stringWidth(status)) / 2, h - 14);
         }
@@ -158,7 +158,7 @@ public class SlotVisualWidget extends JPanel {
 
         // Hourly Rate on Bottom Right
         g2.setColor(UITheme.TEXT_MUTED);
-        g2.setFont(new Font("Segoe UI", Font.PLAIN, 10));
+        g2.setFont(UITheme.font(Font.PLAIN, 10));
         String rateText = String.format("\u20B9%.0f/h", slot.getHourlyRate());
         FontMetrics rFm = g2.getFontMetrics();
         g2.drawString(rateText, w - rFm.stringWidth(rateText) - 6, h - 6);

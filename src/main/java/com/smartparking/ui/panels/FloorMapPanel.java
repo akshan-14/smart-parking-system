@@ -5,1666 +5,1360 @@ import com.smartparking.model.enums.VehicleType;
 import com.smartparking.model.parking.ParkingFloor;
 import com.smartparking.model.parking.ParkingLot;
 import com.smartparking.model.slot.ParkingSlot;
+import com.smartparking.model.ticket.ParkingTicket;
+import com.smartparking.repository.ChargingSessionDao;
 import com.smartparking.repository.ParkingSlotDao;
+import com.smartparking.repository.TicketDao;
 import com.smartparking.service.ParkingService;
+import com.smartparking.service.TariffService;
+import com.smartparking.ui.components.Badge;
 import com.smartparking.ui.components.ModernButton;
+import com.smartparking.ui.components.PageHeader;
 import com.smartparking.ui.components.RoundedPanel;
+import com.smartparking.ui.components.SegmentedControl;
+import com.smartparking.ui.components.Toast;
+import com.smartparking.ui.theme.DarkTheme;
 import com.smartparking.ui.theme.UITheme;
-import com.smartparking.ui.util.ImageLoader;
+import com.smartparking.ui.util.VectorIconUtil;
+import com.smartparking.ui.util.VectorIconUtil.IconType;
 import com.smartparking.util.PlateUtil;
 
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.geom.RoundRectangle2D;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Consumer;
 
 /**
- * Floor Visual Map & Architectural Blueprint Panel.
- * Implements the CAD Blueprint layout with Scale 1:120 Structural CAD Grid,
- * dimensional coordinate ticks (1, 2, 3, 5, 6 / A, B, C, D, E),
- * interactive bay stalls (Mint Vacant, Crimson Active, Iris VIP/ADA, RSVP),
- * Inbound Roadway with Gate 1 In & crosswalk, Substation & HVAC enclosure with hatch pattern,
- * Outbound Roadway to Gate 2 Exit,
- * and live Bay Stall Inspector with embossed license plate, optical CCTV camera stream,
- * telemetry details, and environmental sensors.
+ * Floor map: a live, at-a-glance grid of every bay on a level.
+ *
+ * <pre>
+ *  Floor map                                   [ L1 | L2 | L3 ]  [Refresh]
+ *  ┌ Available 34 ┬ Occupied 12 ┬ Reserved 2 ┬ Maintenance 1 ┬ EV charging 1 ┐
+ *  [All 50] [Standard 42] [EV 4] [Accessible 4]                  [-] 100% [+]
+ *  ┌──────────── bay grid ─────────────┐ ┌── Bay inspector ──┐
+ *  │ A1  A2  A3 ...                    │ │ A14  ● Occupied    │
+ *  │ ──── drive lane ────              │ │ UP32 AB 1234       │
+ *  └───────────────────────────────────┘ └────────────────────┘
+ * </pre>
+ *
+ * <p>All states come from the {@code slots} table, active tickets and active charging sessions.
+ * Bays are clickable and keyboard navigable (arrow keys + Enter to check out an occupied bay).
  */
 public class FloorMapPanel extends JPanel {
+
+    private static final String[] FLOOR_LABELS = {"Level 1", "Level 2", "Level 3"};
+    private static final String[] FLOOR_NAMES = {"Ground floor", "EV hub", "Fleet & VIP"};
+    private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm:ss");
+    private static final DateTimeFormatter ENTRY = DateTimeFormatter.ofPattern("dd MMM, HH:mm");
 
     private final ParkingLot parkingLot;
     private final ParkingService parkingService;
     private final ParkingSlotDao slotDao;
-    private final com.smartparking.repository.TicketDao ticketDao;
-    private final com.smartparking.service.TariffService tariffService;
+    private final TicketDao ticketDao;
+    private final TariffService tariffService;
+    private final ChargingSessionDao chargingDao;
     private final Consumer<String> navigationHandler;
 
     private int activeFloorNumber = 1;
     private String activeFilter = "ALL";
 
-    // Header & Telemetry Labels
-    private JLabel bimSubtitle;
-    private JLabel vipAdaBadge;
-    private JLabel fullPctBadge;
-    private JButton btnL1;
-    private JButton btnL2;
-    private JButton btnL3;
-    private JButton btnFilterAll;
-    private JButton btnFilterStd;
-    private JButton btnFilterEv;
-    private JButton btnFilterAcc;
+    private PageHeader header;
+    private SegmentedControl floorSwitch;
+    private final Map<String, StatChip> statChips = new HashMap<>();
+    private OccupancyBar occupancyBar;
+    private final Map<String, FilterPill> filterPills = new HashMap<>();
     private JLabel zoomPercentLabel;
 
-    // Sub-components
-    private CADBlueprintCanvas cadCanvas;
-    private BayInspectorPanel inspectorPanel;
+    private BayGrid bayGrid;
+    private BayInspector inspector;
 
     public FloorMapPanel(ParkingLot parkingLot, ParkingService parkingService, Consumer<String> navigationHandler) {
         this.parkingLot = parkingLot;
         this.parkingService = parkingService;
         this.slotDao = new ParkingSlotDao();
-        this.ticketDao = new com.smartparking.repository.TicketDao();
-        this.tariffService = new com.smartparking.service.TariffService();
+        this.ticketDao = new TicketDao();
+        this.tariffService = new TariffService();
+        this.chargingDao = new ChargingSessionDao();
         this.navigationHandler = navigationHandler;
 
-        setLayout(new BorderLayout(0, 8));
-        setBackground(new Color(241, 245, 249)); // slate-100
-        setBorder(BorderFactory.createEmptyBorder(8, 12, 8, 12));
+        setLayout(new BorderLayout(0, 0));
+        setBackground(UITheme.BG_CANVAS);
+        setBorder(BorderFactory.createEmptyBorder(24, 28, 24, 28));
 
         initUI();
         renderFloorGrid();
     }
 
+    // =====================================================================================
+    // Layout
+    // =====================================================================================
     private void initUI() {
-        // --- TOP SECTION: MainHeader + FilterLegendBar ---
-        JPanel topContainer = new JPanel();
-        topContainer.setLayout(new BoxLayout(topContainer, BoxLayout.Y_AXIS));
-        topContainer.setOpaque(false);
+        JPanel top = new JPanel();
+        top.setOpaque(false);
+        top.setLayout(new BoxLayout(top, BoxLayout.Y_AXIS));
 
-        topContainer.add(buildMainHeader());
-        topContainer.add(Box.createVerticalStrut(6));
-        topContainer.add(buildFilterLegendBar());
-        topContainer.add(Box.createVerticalStrut(6));
+        header = new PageHeader("Floor map", "Live bay status");
+        floorSwitch = new SegmentedControl(FLOOR_LABELS, 0, sel -> {
+            for (int i = 0; i < FLOOR_LABELS.length; i++) {
+                if (FLOOR_LABELS[i].equals(sel)) {
+                    activeFloorNumber = i + 1;
+                    renderFloorGrid();
+                }
+            }
+        });
+        floorSwitch.setToolTipText("Switch level (Left / Right arrows when focused)");
+        header.addAction(floorSwitch);
+        ModernButton refresh = ModernButton.createSecondary("Refresh",
+                VectorIconUtil.getIcon(IconType.REFRESH, 14, UITheme.TEXT_SECONDARY));
+        refresh.setToolTipText("Reload bay states from the database");
+        refresh.addActionListener(e -> {
+            renderFloorGrid();
+            Toast.info(this, "Floor map refreshed", FLOOR_LABELS[activeFloorNumber - 1] + " · " + LocalDateTime.now().format(TIME));
+        });
+        header.addAction(refresh);
+        header.setAlignmentX(LEFT_ALIGNMENT);
+        top.add(header);
 
-        add(topContainer, BorderLayout.NORTH);
+        JComponent stats = buildStatsStrip();
+        stats.setAlignmentX(LEFT_ALIGNMENT);
+        top.add(stats);
+        top.add(Box.createVerticalStrut(16));
+        JComponent toolbar = buildToolbar();
+        toolbar.setAlignmentX(LEFT_ALIGNMENT);
+        top.add(toolbar);
+        top.add(Box.createVerticalStrut(12));
+        add(top, BorderLayout.NORTH);
 
-        // --- MAIN CONTENT: Left CAD Blueprint + Right Inspector ---
-        JPanel workspace = new JPanel(new BorderLayout(10, 0));
+        // Grid card
+        RoundedPanel gridCard = new RoundedPanel(UITheme.RADIUS_LG, UITheme.BG_CARD, UITheme.BORDER_SUBTLE);
+        gridCard.setLayout(new BorderLayout());
+        gridCard.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        bayGrid = new BayGrid();
+        JScrollPane scroll = new JScrollPane(bayGrid);
+        scroll.setBorder(null);
+        scroll.setOpaque(false);
+        scroll.getViewport().setOpaque(false);
+        scroll.getVerticalScrollBar().setUnitIncrement(18);
+        scroll.getHorizontalScrollBar().setUnitIncrement(18);
+        gridCard.add(scroll, BorderLayout.CENTER);
+
+        inspector = new BayInspector();
+        JScrollPane inspectorScroll = new JScrollPane(inspector);
+        inspectorScroll.setBorder(null);
+        inspectorScroll.setOpaque(false);
+        inspectorScroll.getViewport().setOpaque(false);
+        inspectorScroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        inspectorScroll.getVerticalScrollBar().setUnitIncrement(16);
+        inspectorScroll.setPreferredSize(new Dimension(336, 0));
+
+        JPanel workspace = new JPanel(new BorderLayout(16, 0));
         workspace.setOpaque(false);
-
-        // Left Blueprint Section
-        cadCanvas = new CADBlueprintCanvas();
-        JScrollPane canvasScroll = new JScrollPane(cadCanvas);
-        canvasScroll.setBorder(BorderFactory.createLineBorder(new Color(226, 232, 240), 1, true));
-        canvasScroll.setOpaque(false);
-        canvasScroll.getViewport().setOpaque(false);
-        canvasScroll.getVerticalScrollBar().setUnitIncrement(16);
-        canvasScroll.getHorizontalScrollBar().setUnitIncrement(16);
-
-        JPanel leftBlueprintWrapper = new JPanel(new BorderLayout());
-        leftBlueprintWrapper.setBackground(Color.WHITE);
-        leftBlueprintWrapper.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(226, 232, 240), 1, true),
-                BorderFactory.createEmptyBorder(6, 8, 6, 8)
-        ));
-
-        // Horizontal Axis Ticks at the top of blueprint
-        leftBlueprintWrapper.add(new HorizontalDimensionAxis(), BorderLayout.NORTH);
-        leftBlueprintWrapper.add(canvasScroll, BorderLayout.CENTER);
-        leftBlueprintWrapper.add(buildCanvasFooter(), BorderLayout.SOUTH);
-
-        workspace.add(leftBlueprintWrapper, BorderLayout.CENTER);
-
-        // Right Inspector Column
-        inspectorPanel = new BayInspectorPanel();
-        inspectorPanel.setPreferredSize(new Dimension(340, 0));
-        inspectorPanel.setMinimumSize(new Dimension(320, 0));
-        workspace.add(inspectorPanel, BorderLayout.EAST);
-
+        workspace.add(gridCard, BorderLayout.CENTER);
+        workspace.add(inspectorScroll, BorderLayout.EAST);
         add(workspace, BorderLayout.CENTER);
     }
 
-    /**
-     * Top Navigation Bar: Title, BIM Subtitle, Floor Switcher, Badges, Sync ANPR button.
-     */
-    private JPanel buildMainHeader() {
-        RoundedPanel header = new RoundedPanel(8, Color.WHITE, new Color(226, 232, 240));
-        header.setLayout(new BorderLayout(14, 0));
-        header.setBorder(BorderFactory.createEmptyBorder(8, 14, 8, 14));
-
-        // Left: Icon + Title + Subtitle
-        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
-        left.setOpaque(false);
-
-        JLabel iconBox = new JLabel("", SwingConstants.CENTER) {
-            @Override
-            protected void paintComponent(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(new Color(239, 246, 255)); // blue-50
-                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 6, 6);
-
-                // Draw crisp 2x2 grid symbol
-                g2.setColor(new Color(37, 99, 235)); // blue-600
-                int s = 5;
-                int gap = 2;
-                int sx = (getWidth() - (2 * s + gap)) / 2;
-                int sy = (getHeight() - (2 * s + gap)) / 2;
-                g2.fillRoundRect(sx, sy, s, s, 1, 1);
-                g2.fillRoundRect(sx + s + gap, sy, s, s, 1, 1);
-                g2.fillRoundRect(sx, sy + s + gap, s, s, 1, 1);
-                g2.fillRoundRect(sx + s + gap, sy + s + gap, s, s, 1, 1);
-                g2.dispose();
-            }
-        };
-        iconBox.setPreferredSize(new Dimension(30, 30));
-        iconBox.setFont(new Font("Segoe UI", Font.BOLD, 15));
-        iconBox.setForeground(new Color(37, 99, 235)); // blue-600
-        left.add(iconBox);
-
-        JPanel titles = new JPanel();
-        titles.setLayout(new BoxLayout(titles, BoxLayout.Y_AXIS));
-        titles.setOpaque(false);
-
-        JLabel title = new JLabel("Floor Visual Map & Architectural Blueprint");
-        title.setFont(new Font("Segoe UI", Font.BOLD, 14));
-        title.setForeground(new Color(15, 23, 42)); // slate-900
-
-        bimSubtitle = new JLabel("BIM Layer: Ground Floor (Level 0) • Scale 1:120 Structural CAD Grid • Live Synchronized");
-        bimSubtitle.setFont(new Font("Segoe UI", Font.PLAIN, 11));
-        bimSubtitle.setForeground(new Color(100, 116, 139)); // slate-500
-
-        titles.add(title);
-        titles.add(Box.createVerticalStrut(1));
-        titles.add(bimSubtitle);
-        left.add(titles);
-        header.add(left, BorderLayout.WEST);
-
-        // Right: Floor Switcher Tabs + Capacity Badges + Sync ANPR Button
-        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
-        right.setOpaque(false);
-
-        // Floor Switch Tabs
-        JPanel floorTabs = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 2));
-        floorTabs.setBackground(new Color(241, 245, 249)); // slate-100
-        floorTabs.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(226, 232, 240), 1, true),
-                BorderFactory.createEmptyBorder(1, 2, 1, 2)
-        ));
-
-        btnL1 = createFloorTabButton("L1 (Ground)", 1);
-        btnL2 = createFloorTabButton("L2 (EV Hub)", 2);
-        btnL3 = createFloorTabButton("L3 (Fleet & VIP)", 3);
-
-        floorTabs.add(btnL1);
-        floorTabs.add(btnL2);
-        floorTabs.add(btnL3);
-        right.add(floorTabs);
-
-        // Badges: 1 VIP/ADA and 80.0% Full
-        vipAdaBadge = createBadgeLabel("1 VIP/ADA");
-        fullPctBadge = createBadgeLabel("80.0% Full");
-        right.add(vipAdaBadge);
-        right.add(fullPctBadge);
-
-        // Sync Action Button
-        ModernButton btnSync = new ModernButton("Sync ANPR (Simulated)", null,
-                new Color(37, 99, 235), new Color(29, 78, 216), Color.WHITE);
-        btnSync.setFont(new Font("Segoe UI", Font.BOLD, 11));
-        btnSync.setPreferredSize(new Dimension(150, 28));
-        btnSync.addActionListener(e -> {
-            renderFloorGrid();
-            JOptionPane.showMessageDialog(FloorMapPanel.this,
-                    "ANPR Cameras and SQLite slot states synchronized successfully (Simulated).",
-                    "Live BIM Synchronized", JOptionPane.INFORMATION_MESSAGE);
-        });
-        right.add(btnSync);
-
-        header.add(right, BorderLayout.EAST);
-        return header;
-    }
-
-    private JLabel createBadgeLabel(String text) {
-        JLabel lbl = new JLabel(text);
-        lbl.setFont(new Font("Consolas", Font.BOLD, 11));
-        lbl.setForeground(new Color(51, 65, 85)); // slate-700
-        lbl.setBackground(new Color(241, 245, 249)); // slate-100
-        lbl.setOpaque(true);
-        lbl.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(226, 232, 240), 1, true),
-                BorderFactory.createEmptyBorder(3, 8, 3, 8)
-        ));
-        return lbl;
-    }
-
-    private JButton createFloorTabButton(String text, int floorNum) {
-        JButton btn = new JButton(text);
-        btn.setFont(new Font("Segoe UI", Font.PLAIN, 11));
-        btn.setFocusPainted(false);
-        btn.setBorderPainted(false);
-        btn.setContentAreaFilled(false);
-        btn.setOpaque(true);
-        btn.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        btn.setBorder(BorderFactory.createEmptyBorder(4, 10, 4, 10));
-
-        btn.addActionListener(e -> {
-            activeFloorNumber = floorNum;
-            updateFloorTabStyles();
-            renderFloorGrid();
-        });
-        return btn;
-    }
-
-    private void updateFloorTabStyles() {
-        styleTabButton(btnL1, activeFloorNumber == 1);
-        styleTabButton(btnL2, activeFloorNumber == 2);
-        styleTabButton(btnL3, activeFloorNumber == 3);
-
-        String subtitleText = switch (activeFloorNumber) {
-            case 2 -> "BIM Layer: Level 2 (EV Hub) • Scale 1:120 Structural CAD Grid • Live Synchronized";
-            case 3 -> "BIM Layer: Level 3 (Fleet & VIP Roof) • Scale 1:120 Structural CAD Grid • Live Synchronized";
-            default -> "BIM Layer: Ground Floor (Level 0) • Scale 1:120 Structural CAD Grid • Live Synchronized";
-        };
-        bimSubtitle.setText(subtitleText);
-    }
-
-    private void styleTabButton(JButton btn, boolean isSelected) {
-        if (isSelected) {
-            btn.setBackground(Color.WHITE);
-            btn.setForeground(new Color(15, 23, 42));
-            btn.setFont(new Font("Segoe UI", Font.BOLD, 11));
-            btn.setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createLineBorder(new Color(203, 213, 225), 1, true),
-                    BorderFactory.createEmptyBorder(3, 9, 3, 9)
-            ));
-        } else {
-            btn.setBackground(new Color(241, 245, 249));
-            btn.setForeground(new Color(100, 116, 139));
-            btn.setFont(new Font("Segoe UI", Font.PLAIN, 11));
-            btn.setBorder(BorderFactory.createEmptyBorder(4, 10, 4, 10));
+    /** One row of state counters for the active level; doubles as the colour legend. */
+    private JComponent buildStatsStrip() {
+        RoundedPanel strip = new RoundedPanel(UITheme.RADIUS_LG, UITheme.BG_CARD, UITheme.BORDER_SUBTLE);
+        strip.setLayout(new BorderLayout(0, 12));
+        strip.setBorder(BorderFactory.createEmptyBorder(14, 18, 14, 18));
+        JPanel chips = new JPanel(new GridLayout(1, 5, 12, 0));
+        chips.setOpaque(false);
+        String[][] defs = {
+                {"AVAILABLE", "Available"}, {"OCCUPIED", "Occupied"}, {"RESERVED", "Reserved"},
+                {"MAINTENANCE", "Maintenance"}, {"CHARGING", "EV charging"}};
+        for (String[] d : defs) {
+            StatChip chip = new StatChip(d[1], stateColor(d[0]));
+            statChips.put(d[0], chip);
+            chips.add(chip);
         }
+        strip.add(chips, BorderLayout.CENTER);
+        occupancyBar = new OccupancyBar();
+        strip.add(occupancyBar, BorderLayout.SOUTH);
+        strip.setMaximumSize(new Dimension(Integer.MAX_VALUE, 110));
+        return strip;
     }
 
-    /**
-     * Filter & Legend Bar: Bay Filters (All, Standard, EV, Accessible) and Status Legend.
-     */
-    private JPanel buildFilterLegendBar() {
-        RoundedPanel bar = new RoundedPanel(8, Color.WHITE, new Color(226, 232, 240));
-        bar.setLayout(new BorderLayout(14, 0));
-        bar.setBorder(BorderFactory.createEmptyBorder(6, 14, 6, 14));
+    private JComponent buildToolbar() {
+        JPanel bar = new JPanel(new BorderLayout());
+        bar.setOpaque(false);
+        bar.setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
 
-        // Left Filter Pills
-        JPanel filterBox = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        filterBox.setOpaque(false);
+        JPanel filters = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        filters.setOpaque(false);
+        String[][] defs = {{"ALL", "All bays"}, {"STANDARD", "Standard"}, {"EV", "EV"}, {"ACCESSIBLE", "Accessible"}};
+        for (String[] d : defs) {
+            FilterPill pill = new FilterPill(d[0], d[1]);
+            filterPills.put(d[0], pill);
+            filters.add(pill);
+        }
+        bar.add(filters, BorderLayout.WEST);
 
-        JLabel fLbl = new JLabel("BAY FILTER:");
-        fLbl.setFont(new Font("Segoe UI", Font.BOLD, 10));
-        fLbl.setForeground(new Color(100, 116, 139)); // slate-500
-        filterBox.add(fLbl);
-
-        btnFilterAll = createFilterPill("All (64)", "ALL", true);
-        btnFilterStd = createFilterPill("Standard (11)", "STANDARD", false);
-        btnFilterEv = createFilterPill("EV Bays (2)", "EV", false);
-        btnFilterAcc = createFilterPill("Accessible (2)", "ACCESSIBLE", false);
-
-        filterBox.add(btnFilterAll);
-        filterBox.add(btnFilterStd);
-        filterBox.add(btnFilterEv);
-        filterBox.add(btnFilterAcc);
-        bar.add(filterBox, BorderLayout.WEST);
-
-        // Right Status Legend & Interactive Zoom Controls
-        JPanel legendBox = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
-        legendBox.setOpaque(false);
-
-        legendBox.add(createLegendDot(new Color(52, 211, 153), "Mint = Vacant"));
-        legendBox.add(createLegendDot(new Color(239, 68, 68), "Crimson = Active"));
-        legendBox.add(createLegendDot(new Color(99, 102, 241), "Iris = VIP/ADA"));
-
-        // Zoom Toolbar: [-] [100%] [+] [Fit] [Reset]
-        JPanel zoomBox = new JPanel(new FlowLayout(FlowLayout.RIGHT, 3, 0));
-        zoomBox.setOpaque(false);
-        zoomBox.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(0, 1, 0, 0, new Color(226, 232, 240)),
-                BorderFactory.createEmptyBorder(0, 8, 0, 0)
-        ));
-
-        JButton btnZoomOut = createZoomButton("-", e -> {
-            if (cadCanvas != null) cadCanvas.zoom(-0.15f);
-        });
-        zoomPercentLabel = new JLabel("100%");
-        zoomPercentLabel.setFont(new Font("Consolas", Font.BOLD, 11));
-        zoomPercentLabel.setForeground(new Color(71, 85, 105));
-        zoomPercentLabel.setPreferredSize(new Dimension(38, 22));
-        zoomPercentLabel.setHorizontalAlignment(SwingConstants.CENTER);
-
-        JButton btnZoomIn = createZoomButton("+", e -> {
-            if (cadCanvas != null) cadCanvas.zoom(0.15f);
-        });
-        JButton btnZoomReset = createZoomButton("Reset", e -> {
-            if (cadCanvas != null) cadCanvas.resetZoom();
-        });
-
-        zoomBox.add(btnZoomOut);
-        zoomBox.add(zoomPercentLabel);
-        zoomBox.add(btnZoomIn);
-        zoomBox.add(btnZoomReset);
-        legendBox.add(zoomBox);
-
-        bar.add(legendBox, BorderLayout.EAST);
+        JPanel zoom = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        zoom.setOpaque(false);
+        JLabel zl = new JLabel("Tile size");
+        zl.setFont(UITheme.font(Font.PLAIN, 12));
+        zl.setForeground(UITheme.TEXT_TERTIARY);
+        zoom.add(zl);
+        ModernButton minus = ModernButton.createSecondary(null, VectorIconUtil.getIcon(IconType.MINUS, 12, UITheme.TEXT_SECONDARY)).compact();
+        minus.setToolTipText("Smaller tiles");
+        minus.getAccessibleContext().setAccessibleName("Zoom out");
+        minus.addActionListener(e -> bayGrid.zoom(-0.15f));
+        zoomPercentLabel = new JLabel("100%", SwingConstants.CENTER);
+        zoomPercentLabel.setFont(UITheme.font(Font.BOLD, 12));
+        zoomPercentLabel.setForeground(UITheme.TEXT_BODY);
+        zoomPercentLabel.setPreferredSize(new Dimension(44, 28));
+        ModernButton plus = ModernButton.createSecondary(null, VectorIconUtil.getIcon(IconType.PLUS, 12, UITheme.TEXT_SECONDARY)).compact();
+        plus.setToolTipText("Larger tiles");
+        plus.getAccessibleContext().setAccessibleName("Zoom in");
+        plus.addActionListener(e -> bayGrid.zoom(0.15f));
+        ModernButton reset = ModernButton.createGhost("Reset", null).compact();
+        reset.addActionListener(e -> bayGrid.resetZoom());
+        zoom.add(minus);
+        zoom.add(zoomPercentLabel);
+        zoom.add(plus);
+        zoom.add(reset);
+        bar.add(zoom, BorderLayout.EAST);
         return bar;
     }
 
-    private JButton createZoomButton(String label, java.awt.event.ActionListener al) {
-        JButton btn = new JButton(label);
-        btn.setFont(new Font("Segoe UI", Font.BOLD, 10));
-        btn.setForeground(new Color(51, 65, 85));
-        btn.setBackground(new Color(241, 245, 249));
-        btn.setFocusPainted(false);
-        btn.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(203, 213, 225), 1, true),
-                BorderFactory.createEmptyBorder(2, 6, 2, 6)
-        ));
-        btn.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        btn.addActionListener(al);
-        return btn;
-    }
+    // =====================================================================================
+    // Data
+    // =====================================================================================
 
-    private JButton createFilterPill(String label, String key, boolean defaultActive) {
-        JButton btn = new JButton(label) {
-            @Override
-            protected void paintComponent(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                boolean isActive = key.equals(activeFilter);
-                if (isActive) {
-                    g2.setColor(new Color(37, 99, 235)); // #2563eb royal blue
-                } else if (getModel().isRollover()) {
-                    g2.setColor(new Color(226, 232, 240)); // #e2e8f0 hover
-                } else {
-                    g2.setColor(new Color(241, 245, 249)); // #f1f5f9
-                }
-                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 14, 14);
-                g2.dispose();
-                super.paintComponent(g);
-            }
-        };
-        btn.setFont(new Font("Segoe UI", Font.BOLD, 11));
-        btn.setFocusPainted(false);
-        btn.setBorderPainted(false);
-        btn.setContentAreaFilled(false);
-        btn.setOpaque(false);
-        btn.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        btn.setBorder(BorderFactory.createEmptyBorder(3, 10, 3, 10));
-        styleFilterPill(btn, defaultActive);
-
-        btn.addActionListener(e -> {
-            activeFilter = key;
-            styleFilterPill(btnFilterAll, "ALL".equals(key));
-            styleFilterPill(btnFilterStd, "STANDARD".equals(key));
-            styleFilterPill(btnFilterEv, "EV".equals(key));
-            styleFilterPill(btnFilterAcc, "ACCESSIBLE".equals(key));
-            if (btnFilterAll != null) btnFilterAll.repaint();
-            if (btnFilterStd != null) btnFilterStd.repaint();
-            if (btnFilterEv != null) btnFilterEv.repaint();
-            if (btnFilterAcc != null) btnFilterAcc.repaint();
-            cadCanvas.repaint();
-        });
-        return btn;
-    }
-
-    private void styleFilterPill(JButton btn, boolean isActive) {
-        if (btn == null) return;
-        btn.setForeground(isActive ? Color.WHITE : new Color(71, 85, 105));
-    }
-
-    private JPanel createLegendDot(Color color, String text) {
-        JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
-        p.setOpaque(false);
-
-        JLabel dot = new JLabel() {
-            @Override
-            protected void paintComponent(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(color);
-                g2.fillOval(0, (getHeight() - 8) / 2, 8, 8);
-                g2.dispose();
-            }
-        };
-        dot.setPreferredSize(new Dimension(8, 14));
-
-        JLabel lbl = new JLabel(text);
-        lbl.setFont(new Font("Segoe UI", Font.PLAIN, 11));
-        lbl.setForeground(new Color(71, 85, 105)); // slate-600
-
-        p.add(dot);
-        p.add(lbl);
-        return p;
-    }
-
-    /**
-     * Canvas footer with Mesh Signal, ANPR Cameras status, and Quick Floor Switch.
-     */
-    private JPanel buildCanvasFooter() {
-        JPanel footer = new JPanel(new BorderLayout());
-        footer.setOpaque(false);
-        footer.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(1, 0, 0, 0, new Color(226, 232, 240)),
-                BorderFactory.createEmptyBorder(6, 4, 2, 4)
-        ));
-
-        JPanel leftSensors = new JPanel(new FlowLayout(FlowLayout.LEFT, 16, 0));
-        leftSensors.setOpaque(false);
-
-        JLabel rssiLbl = new JLabel("\u25CF Mesh Signal: 99.8% RSSI");
-        rssiLbl.setFont(new Font("Consolas", Font.BOLD, 11));
-        rssiLbl.setForeground(new Color(16, 185, 129)); // emerald-500
-
-        JLabel anprLbl = new JLabel("\u25CF ANPR Cameras: 4/4 Connected");
-        anprLbl.setFont(new Font("Consolas", Font.BOLD, 11));
-        anprLbl.setForeground(new Color(37, 99, 235)); // blue-600
-
-        leftSensors.add(rssiLbl);
-        leftSensors.add(anprLbl);
-        footer.add(leftSensors, BorderLayout.WEST);
-
-        JPanel jumpBox = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
-        jumpBox.setOpaque(false);
-
-        JLabel switchLbl = new JLabel("Switch Floor:");
-        switchLbl.setFont(new Font("Segoe UI", Font.PLAIN, 11));
-        switchLbl.setForeground(new Color(100, 116, 139));
-        jumpBox.add(switchLbl);
-
-        JButton jumpL2 = createFloorNavButton("Floor 2 (EV Fast Hub) \u2192", 2);
-        JButton jumpL3 = createFloorNavButton("Floor 3 (Fleet Roof) \u2192", 3);
-
-        jumpBox.add(jumpL2);
-        jumpBox.add(jumpL3);
-        footer.add(jumpBox, BorderLayout.EAST);
-
-        return footer;
-    }
-
-    private JButton createFloorNavButton(String label, int floorNum) {
-        JButton btn = new JButton(label);
-        btn.setFont(new Font("Segoe UI", Font.PLAIN, 11));
-        btn.setBackground(new Color(248, 250, 252));
-        btn.setForeground(new Color(51, 65, 85));
-        btn.setFocusPainted(false);
-        btn.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(203, 213, 225), 1, true),
-                BorderFactory.createEmptyBorder(2, 8, 2, 8)
-        ));
-        btn.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        btn.addActionListener(e -> {
-            activeFloorNumber = floorNum;
-            updateFloorTabStyles();
-            renderFloorGrid();
-        });
-        return btn;
-    }
-
-    /**
-     * Refreshes the floor slots from SQLite and updates both the CAD canvas and Telemetry badges.
-     */
+    /** Reloads the active level from SQLite and refreshes counters, grid and inspector. */
     public void renderFloorGrid() {
-        updateFloorTabStyles();
-
         List<ParkingSlot> floorSlots = slotDao.findByFloor(activeFloorNumber);
         if (floorSlots.isEmpty()) {
             Optional<ParkingFloor> floorOpt = parkingLot.getFloorByNumber(activeFloorNumber);
-            if (floorOpt.isPresent()) {
-                floorSlots = floorOpt.get().getAllSlots();
-            }
+            if (floorOpt.isPresent()) floorSlots = floorOpt.get().getAllSlots();
         }
 
-        int total = floorSlots.size();
-        if (total == 0) total = 50;
+        // one query for all active tickets, keyed by slot
+        Map<String, ParkingTicket> activeBySlot = new HashMap<>();
+        Map<String, ParkingTicket> activeByPlate = new HashMap<>();
+        try {
+            for (ParkingTicket t : ticketDao.findAllActive()) {
+                if (t.getSlotId() != null) activeBySlot.put(t.getSlotId().toUpperCase(), t);
+                if (t.getLicensePlate() != null) activeByPlate.put(PlateUtil.normalize(t.getLicensePlate()), t);
+            }
+        } catch (Exception ignored) {
+            // map still renders from slot states alone
+        }
 
-        long occ = floorSlots.stream().filter(s -> "OCCUPIED".equalsIgnoreCase(s.getStatus())).count();
-        long vip = floorSlots.stream().filter(s -> s.getSlotType() == SlotType.HANDICAPPED || s.getSlotType() == SlotType.ACCESSIBLE).count();
-        double pct = total > 0 ? (occ * 100.0 / total) : 0.0;
+        List<Bay> bays = new ArrayList<>();
+        for (ParkingSlot s : floorSlots) {
+            Bay b = new Bay(s);
+            if (b.state == BayState.OCCUPIED) {
+                ParkingTicket t = activeBySlot.get(b.id.toUpperCase());
+                if (t == null && b.plate != null) t = activeByPlate.get(PlateUtil.normalize(b.plate));
+                b.attachTicket(t);
+                if (b.ev && t != null) {
+                    try {
+                        if (chargingDao.findActiveByTicketId(t.getTicketId()).isPresent()) b.state = BayState.CHARGING;
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
+            bays.add(b);
+        }
+        bays.sort(Comparator.comparingInt(Bay::sortKey).thenComparing(b -> b.id));
 
-        if (vipAdaBadge != null) vipAdaBadge.setText(vip + " VIP/ADA");
-        if (fullPctBadge != null) fullPctBadge.setText(String.format("%.1f%% Full", pct));
+        // counters
+        Map<BayState, Integer> counts = new HashMap<>();
+        for (Bay b : bays) counts.merge(b.state, 1, Integer::sum);
+        int total = bays.size();
+        statChips.get("AVAILABLE").set(counts.getOrDefault(BayState.AVAILABLE, 0), total);
+        statChips.get("OCCUPIED").set(counts.getOrDefault(BayState.OCCUPIED, 0), total);
+        statChips.get("RESERVED").set(counts.getOrDefault(BayState.RESERVED, 0), total);
+        statChips.get("MAINTENANCE").set(counts.getOrDefault(BayState.MAINTENANCE, 0), total);
+        statChips.get("CHARGING").set(counts.getOrDefault(BayState.CHARGING, 0), total);
+        occupancyBar.set(counts, total);
 
-        // Update bay filter button counts dynamically from real floor slots
-        long countStd = floorSlots.stream().filter(s -> s.getSlotType() == SlotType.REGULAR || s.getSlotType() == SlotType.COMPACT || s.getSlotType() == SlotType.LARGE).count();
-        long countEv = floorSlots.stream().filter(s -> s.getSlotType() == SlotType.ELECTRIC).count();
-        long countAcc = vip;
+        filterPills.get("ALL").setCount(total);
+        filterPills.get("STANDARD").setCount((int) bays.stream().filter(b -> "STANDARD".equals(b.category)).count());
+        filterPills.get("EV").setCount((int) bays.stream().filter(b -> "EV".equals(b.category)).count());
+        filterPills.get("ACCESSIBLE").setCount((int) bays.stream().filter(b -> "ACCESSIBLE".equals(b.category)).count());
 
-        if (btnFilterAll != null) btnFilterAll.setText("All (" + total + ")");
-        if (btnFilterStd != null) btnFilterStd.setText("Standard (" + countStd + ")");
-        if (btnFilterEv != null) btnFilterEv.setText("EV Bays (" + countEv + ")");
-        if (btnFilterAcc != null) btnFilterAcc.setText("Accessible (" + countAcc + ")");
+        int occupiedNow = counts.getOrDefault(BayState.OCCUPIED, 0) + counts.getOrDefault(BayState.CHARGING, 0);
+        double pct = total > 0 ? occupiedNow * 100.0 / total : 0;
+        header.setSubtitle(String.format("%s · %s  ·  %d bays · %.0f%% occupied  ·  updated %s",
+                FLOOR_LABELS[activeFloorNumber - 1], FLOOR_NAMES[activeFloorNumber - 1], total, pct,
+                LocalDateTime.now().format(TIME)));
+        floorSwitch.setSelectedIndex(activeFloorNumber - 1, false);
 
-        // Update floor switcher tab counts dynamically
-        long f1 = slotDao.findByFloor(1).size();
-        long f2 = slotDao.findByFloor(2).size();
-        long f3 = slotDao.findByFloor(3).size();
-        if (btnL1 != null) btnL1.setText("L1 (Ground) (" + (f1 > 0 ? f1 : 50) + ")");
-        if (btnL2 != null) btnL2.setText("L2 (EV Hub) (" + (f2 > 0 ? f2 : 50) + ")");
-        if (btnL3 != null) btnL3.setText("L3 (Fleet & VIP) (" + (f3 > 0 ? f3 : 50) + ")");
-
-        cadCanvas.syncFloorSlots(floorSlots);
-        cadCanvas.repaint();
+        bayGrid.setBays(bays);
     }
 
-    /**
-     * Navigates to the appropriate floor and highlights the given slot ID.
-     */
+    /** Switches to the level owning {@code slotId} and selects that bay. */
     public void highlightSlot(String slotId) {
         if (slotId == null || slotId.isBlank()) return;
-
         int targetFloor = activeFloorNumber;
-        String upper = slotId.toUpperCase();
-        if (upper.startsWith("A") || upper.startsWith("F1")) targetFloor = 1;
-        else if (upper.startsWith("B") || upper.startsWith("F2")) targetFloor = 2;
-        else if (upper.startsWith("C") || upper.startsWith("F3")) targetFloor = 3;
-
+        Optional<ParkingSlot> real = Optional.empty();
+        try {
+            real = slotDao.findById(slotId.trim());
+        } catch (Exception ignored) {
+        }
+        if (real.isPresent()) {
+            targetFloor = real.get().getFloorNumber();
+        } else {
+            String upper = slotId.toUpperCase();
+            if (upper.startsWith("A") || upper.startsWith("F1")) targetFloor = 1;
+            else if (upper.startsWith("B") || upper.startsWith("F2")) targetFloor = 2;
+            else if (upper.startsWith("C") || upper.startsWith("F3")) targetFloor = 3;
+        }
         if (activeFloorNumber != targetFloor) {
             activeFloorNumber = targetFloor;
-            renderFloorGrid();
         }
-
-        cadCanvas.highlightStall(slotId);
+        renderFloorGrid();
+        bayGrid.selectById(slotId.trim());
+        bayGrid.requestFocusInWindow();
     }
 
-    // =========================================================================
-    // INNER CLASS: Horizontal Dimension Axis Ticks (1, 2, 3, 5, 6)
-    // =========================================================================
-    private static class HorizontalDimensionAxis extends JPanel {
-        public HorizontalDimensionAxis() {
-            setPreferredSize(new Dimension(1000, 26));
-            setOpaque(false);
-            setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, new Color(203, 213, 225)));
+    private static Color stateColor(String key) {
+        switch (key) {
+            case "AVAILABLE": return UITheme.SLOT_AVAILABLE;
+            case "OCCUPIED": return UITheme.SLOT_OCCUPIED;
+            case "RESERVED": return UITheme.SLOT_RESERVED;
+            case "MAINTENANCE": return UITheme.SLOT_MAINTENANCE;
+            case "CHARGING": return UITheme.SLOT_EV;
+            default: return UITheme.ACCENT;
+        }
+    }
+
+    // =====================================================================================
+    // Model
+    // =====================================================================================
+    private enum BayState {
+        AVAILABLE("Available"), OCCUPIED("Occupied"), RESERVED("Reserved"), MAINTENANCE("Maintenance"), CHARGING("EV charging");
+        final String label;
+
+        BayState(String label) {
+            this.label = label;
         }
 
-        @Override
-        protected void paintComponent(Graphics g) {
-            super.paintComponent(g);
-            Graphics2D g2 = (Graphics2D) g.create();
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        Color color() {
+            return stateColor(name());
+        }
+    }
 
-            int w = getWidth();
-            // 5 markers: 1, 2, 3, 5, 6 with intermediate distance ticks
-            int[] xMarks = {48, 260, 470, 750, w - 30};
-            String[] nums = {"1", "2", "3", "5", "6"};
-            String[] dists = {"1,400", "2,480", "3,400", "5,420"};
+    private static final class Bay {
+        final String id;
+        final SlotType type;
+        final int floor;
+        final double rate;
+        BayState state;
+        final boolean ev;
+        final boolean accessible;
+        final String category;
+        String plate;
+        VehicleType vehicleType;
+        String brand;
+        ParkingTicket ticket;
+        Rectangle bounds = new Rectangle();
 
-            for (int i = 0; i < xMarks.length; i++) {
-                int cx = xMarks[i];
-                // Draw circle marker
-                g2.setColor(Color.WHITE);
-                g2.fillOval(cx - 9, 3, 18, 18);
-                g2.setColor(new Color(148, 163, 184)); // slate-400
-                g2.setStroke(new BasicStroke(1.5f));
-                g2.drawOval(cx - 9, 3, 18, 18);
-
-                g2.setColor(new Color(51, 65, 85)); // slate-700
-                g2.setFont(new Font("Consolas", Font.BOLD, 10));
-                g2.drawString(nums[i], cx - 3, 16);
-
-                if (i < dists.length) {
-                    g2.setColor(new Color(148, 163, 184));
-                    g2.setFont(new Font("Consolas", Font.PLAIN, 10));
-                    int midX = (cx + xMarks[i + 1]) / 2;
-                    g2.drawString(dists[i], midX - 14, 16);
+        Bay(ParkingSlot s) {
+            id = s.getSlotId();
+            type = s.getSlotType();
+            floor = s.getFloorNumber();
+            rate = s.getHourlyRate() > 0 ? s.getHourlyRate() : (type != null ? type.getDefaultHourlyRate() : 0);
+            String st = s.getStatus() == null ? "" : s.getStatus().toUpperCase();
+            if (st.equals("OCCUPIED")) state = BayState.OCCUPIED;
+            else if (st.equals("RESERVED")) state = BayState.RESERVED;
+            else if (st.equals("MAINTENANCE") || st.equals("OUT_OF_SERVICE")) state = BayState.MAINTENANCE;
+            else state = BayState.AVAILABLE;
+            ev = type == SlotType.ELECTRIC;
+            accessible = type == SlotType.ACCESSIBLE || type == SlotType.HANDICAPPED;
+            category = ev ? "EV" : accessible ? "ACCESSIBLE" : "STANDARD";
+            if (state == BayState.OCCUPIED) {
+                if (s.getCurrentVehiclePlate() != null && !s.getCurrentVehiclePlate().isBlank()) plate = s.getCurrentVehiclePlate();
+                else if (s.getCurrentVehicle() != null) plate = s.getCurrentVehicle().getLicensePlate();
+                if (s.getCurrentVehicle() != null) {
+                    vehicleType = s.getCurrentVehicle().getType();
+                    brand = s.getCurrentVehicle().getBrand();
                 }
             }
-            g2.dispose();
+        }
+
+        void attachTicket(ParkingTicket t) {
+            ticket = t;
+            if (t != null) {
+                if (vehicleType == null) vehicleType = t.getVehicleType();
+                if (plate == null || plate.isBlank()) plate = t.getLicensePlate();
+            }
+        }
+
+        boolean occupiedLike() {
+            return state == BayState.OCCUPIED || state == BayState.CHARGING;
+        }
+
+        int sortKey() {
+            String digits = id.replaceAll("[^0-9]", "");
+            try {
+                return digits.isEmpty() ? Integer.MAX_VALUE : Integer.parseInt(digits);
+            } catch (NumberFormatException e) {
+                return Integer.MAX_VALUE;
+            }
+        }
+
+        String typeLabel() {
+            if (type == null) return "Bay";
+            switch (type) {
+                case COMPACT: return "Compact bay";
+                case REGULAR: return "Standard bay";
+                case LARGE: return "Large vehicle bay";
+                case ELECTRIC: return "EV charging bay";
+                default: return "Accessible bay";
+            }
         }
     }
 
-    // =========================================================================
-    // INNER CLASS: CAD Architectural Canvas (Faithfully matches HTML blueprint)
-    // =========================================================================
-    private class CADBlueprintCanvas extends JPanel {
-        private final List<CADStall> bays = new ArrayList<>();
-        private CADStall selectedStall = null;
-        private float zoomScale = 1.0f;
+    private static IconType vehicleIcon(VehicleType vt) {
+        if (vt == null) return IconType.CAR;
+        switch (vt) {
+            case MOTORCYCLE:
+            case EV_TWO_WHEELER: return IconType.MOTORCYCLE;
+            case AUTO_RICKSHAW: return IconType.AUTO_RICKSHAW;
+            case LCV:
+            case HCV: return IconType.TRUCK;
+            default: return IconType.CAR;
+        }
+    }
 
-        public CADBlueprintCanvas() {
-            setBackground(Color.WHITE);
-            setPreferredSize(new Dimension(1020, 500));
+    // =====================================================================================
+    // Bay grid canvas
+    // =====================================================================================
+    private class BayGrid extends AccessibleComponent implements Scrollable {
+        private static final int BASE_W = 92, BASE_H = 84, GAP = 10, LANE = 30, PAD = 18, ROWS_PER_AISLE = 2;
+        private List<Bay> bays = new ArrayList<>();
+        private Bay selected;
+        private Bay hovered;
+        private float zoom = 1f;
+        private int cols = 10;
+        private int offsetX = PAD;
 
-            addMouseListener(new MouseAdapter() {
+        BayGrid() {
+            setOpaque(false);
+            setFocusable(true);
+            setToolTipText("");
+            accessibleName = "Parking bay grid";
+            MouseAdapter ma = new MouseAdapter() {
                 @Override
-                public void mouseClicked(MouseEvent e) {
-                    Point p = new Point((int) (e.getX() / zoomScale), (int) (e.getY() / zoomScale));
-                    for (CADStall stall : bays) {
-                        if (stall.bounds.contains(p)) {
-                            selectedStall = stall;
-                            inspectorPanel.displayStall(stall);
-                            repaint();
-                            return;
-                        }
-                    }
+                public void mousePressed(MouseEvent e) {
+                    requestFocusInWindow();
+                    Bay b = bayAt(e.getPoint());
+                    if (b != null) select(b);
+                    if (b != null && e.getClickCount() == 2 && b.occupiedLike()) checkout(b);
                 }
-            });
 
-            addMouseMotionListener(new MouseAdapter() {
                 @Override
                 public void mouseMoved(MouseEvent e) {
-                    Point p = new Point((int) (e.getX() / zoomScale), (int) (e.getY() / zoomScale));
-                    boolean hovering = false;
-                    for (CADStall stall : bays) {
-                        if (stall.bounds.contains(p)) {
-                            hovering = true;
-                            break;
-                        }
+                    Bay b = bayAt(e.getPoint());
+                    if (b != hovered) {
+                        hovered = b;
+                        setCursor(Cursor.getPredefinedCursor(b != null ? Cursor.HAND_CURSOR : Cursor.DEFAULT_CURSOR));
+                        repaint();
                     }
-                    setCursor(hovering ? new Cursor(Cursor.HAND_CURSOR) : new Cursor(Cursor.DEFAULT_CURSOR));
+                }
+
+                @Override
+                public void mouseExited(MouseEvent e) {
+                    hovered = null;
+                    repaint();
+                }
+            };
+            addMouseListener(ma);
+            addMouseMotionListener(ma);
+            addFocusListener(new java.awt.event.FocusAdapter() {
+                @Override
+                public void focusGained(java.awt.event.FocusEvent e) {
+                    repaint();
+                }
+
+                @Override
+                public void focusLost(java.awt.event.FocusEvent e) {
+                    repaint();
+                }
+            });
+            bindKey(KeyEvent.VK_RIGHT, 1);
+            bindKey(KeyEvent.VK_LEFT, -1);
+            bindKey(KeyEvent.VK_DOWN, Integer.MAX_VALUE);
+            bindKey(KeyEvent.VK_UP, Integer.MIN_VALUE);
+            getInputMap(WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "checkout");
+            getActionMap().put("checkout", new AbstractAction() {
+                @Override
+                public void actionPerformed(java.awt.event.ActionEvent e) {
+                    if (selected != null && selected.occupiedLike()) checkout(selected);
                 }
             });
         }
 
-        public void zoom(float delta) {
-            zoomScale = Math.max(0.6f, Math.min(2.0f, zoomScale + delta));
-            if (zoomPercentLabel != null) {
-                zoomPercentLabel.setText(Math.round(zoomScale * 100) + "%");
-            }
-            setPreferredSize(new Dimension((int)(1020 * zoomScale), (int)(500 * zoomScale)));
+        private void bindKey(int key, int delta) {
+            String name = "move" + key;
+            getInputMap(WHEN_FOCUSED).put(KeyStroke.getKeyStroke(key, 0), name);
+            getActionMap().put(name, new AbstractAction() {
+                @Override
+                public void actionPerformed(java.awt.event.ActionEvent e) {
+                    if (bays.isEmpty()) return;
+                    int i = selected == null ? 0 : bays.indexOf(selected);
+                    int d = delta == Integer.MAX_VALUE ? cols : delta == Integer.MIN_VALUE ? -cols : delta;
+                    int n = Math.max(0, Math.min(bays.size() - 1, i + d));
+                    select(bays.get(n));
+                    scrollRectToVisible(bays.get(n).bounds);
+                }
+            });
+        }
+
+        void setBays(List<Bay> list) {
+            String keep = selected != null ? selected.id : null;
+            bays = list;
+            selected = null;
+            hovered = null;
+            Bay pick = null;
+            if (keep != null) pick = list.stream().filter(b -> b.id.equalsIgnoreCase(keep)).findFirst().orElse(null);
+            if (pick == null) pick = list.stream().filter(Bay::occupiedLike).findFirst().orElse(list.isEmpty() ? null : list.get(0));
+            selected = pick;
+            inspector.show(pick);
             revalidate();
             repaint();
         }
 
-        public void resetZoom() {
-            zoomScale = 1.0f;
-            if (zoomPercentLabel != null) {
-                zoomPercentLabel.setText("100%");
-            }
-            setPreferredSize(new Dimension(1020, 500));
+        void selectById(String id) {
+            bays.stream().filter(b -> b.id.equalsIgnoreCase(id)).findFirst().ifPresent(b -> {
+                select(b);
+                SwingUtilities.invokeLater(() -> scrollRectToVisible(b.bounds));
+            });
+        }
+
+        private void select(Bay b) {
+            selected = b;
+            inspector.show(b);
+            repaint();
+        }
+
+        void zoom(float delta) {
+            zoom = Math.max(0.7f, Math.min(1.6f, zoom + delta));
+            zoomPercentLabel.setText(Math.round(zoom * 100) + "%");
             revalidate();
             repaint();
         }
 
-        public void syncFloorSlots(List<ParkingSlot> realSlots) {
-            bays.clear();
-            if (realSlots == null || realSlots.isEmpty()) {
-                realSlots = slotDao.findByFloor(activeFloorNumber);
-            }
-
-            int slotIdx = 0;
-
-            String floorPrefix = (activeFloorNumber == 1) ? "A" : (activeFloorNumber == 2 ? "B" : "C");
-
-            // Bank 1: Top Left Bank (5 cols x 2 rows = 10 bays: 1..10)
-            int xG1 = 44;
-            int wBay1 = 44;
-            int gap1 = 4;
-            for (int r = 0; r < 2; r++) {
-                int by = (r == 0) ? 36 : 96;
-                for (int c = 0; c < 5; c++) {
-                    String slotId = (slotIdx < realSlots.size()) ? realSlots.get(slotIdx).getSlotId() : (floorPrefix + (slotIdx + 1));
-                    int bx = xG1 + c * (wBay1 + gap1);
-                    CADStall stall = new CADStall(slotId, new Rectangle(bx, by, wBay1, 56));
-                    if (slotIdx < realSlots.size()) {
-                        stall.bindRealSlot(realSlots.get(slotIdx), ticketDao, tariffService);
-                    }
-                    bays.add(stall);
-                    slotIdx++;
-                }
-            }
-
-            // Bank 2: Top Mid Bank (3 cols x 2 rows = 6 bays: 11..16)
-            int xG2 = 300;
-            for (int r = 0; r < 2; r++) {
-                int by = (r == 0) ? 36 : 96;
-                for (int c = 0; c < 3; c++) {
-                    String slotId = (slotIdx < realSlots.size()) ? realSlots.get(slotIdx).getSlotId() : (floorPrefix + (slotIdx + 1));
-                    int bx = xG2 + c * (wBay1 + gap1);
-                    CADStall stall = new CADStall(slotId, new Rectangle(bx, by, wBay1, 56));
-                    if (slotIdx < realSlots.size()) {
-                        stall.bindRealSlot(realSlots.get(slotIdx), ticketDao, tariffService);
-                    }
-                    bays.add(stall);
-                    slotIdx++;
-                }
-            }
-
-            // Bank 3: Top Right Bank (7 cols x 2 rows = 14 bays: 17..30)
-            int xG3 = 464;
-            int wBay3 = 44;
-            for (int r = 0; r < 2; r++) {
-                int by = (r == 0) ? 36 : 96;
-                for (int c = 0; c < 7; c++) {
-                    String slotId = (slotIdx < realSlots.size()) ? realSlots.get(slotIdx).getSlotId() : (floorPrefix + (slotIdx + 1));
-                    int bx = xG3 + c * (wBay3 + gap1);
-                    CADStall stall = new CADStall(slotId, new Rectangle(bx, by, wBay3, 56));
-                    if (slotIdx < realSlots.size()) {
-                        stall.bindRealSlot(realSlots.get(slotIdx), ticketDao, tariffService);
-                    }
-                    bays.add(stall);
-                    slotIdx++;
-                }
-            }
-
-            // Bank 4: Middle Row Stalls (8 cols x 1 row = 8 bays: 31..38)
-            int xC = 44;
-            int wBayC = 50;
-            int gapC = 5;
-            for (int c = 0; c < 8; c++) {
-                String slotId = (slotIdx < realSlots.size()) ? realSlots.get(slotIdx).getSlotId() : (floorPrefix + (slotIdx + 1));
-                int bx = xC + c * (wBayC + gapC);
-                CADStall stall = new CADStall(slotId, new Rectangle(bx, 226, wBayC, 56));
-                if (slotIdx < realSlots.size()) {
-                    stall.bindRealSlot(realSlots.get(slotIdx), ticketDao, tariffService);
-                }
-                bays.add(stall);
-                slotIdx++;
-            }
-
-            // Bank 5: Bottom Row Stalls (12 cols x 1 row = 12 bays: 39..50)
-            int xB = 44;
-            int wBayB = 58;
-            int gapB = 4;
-            for (int c = 0; c < 12; c++) {
-                String slotId = (slotIdx < realSlots.size()) ? realSlots.get(slotIdx).getSlotId() : (floorPrefix + (slotIdx + 1));
-                int bx = xB + c * (wBayB + gapB);
-                CADStall stall = new CADStall(slotId, new Rectangle(bx, 350, wBayB, 54));
-                if (slotIdx < realSlots.size()) {
-                    stall.bindRealSlot(realSlots.get(slotIdx), ticketDao, tariffService);
-                }
-                bays.add(stall);
-                slotIdx++;
-            }
-
-            // Default selected stall: first occupied or first slot
-            CADStall defaultStall = bays.stream()
-                    .filter(b -> b.isOccupied)
-                    .findFirst()
-                    .orElse(bays.get(0));
-
-            selectedStall = defaultStall;
-            inspectorPanel.displayStall(defaultStall);
+        void resetZoom() {
+            zoom = 1f;
+            zoomPercentLabel.setText("100%");
+            revalidate();
+            repaint();
         }
 
-        public void highlightStall(String slotId) {
-            for (CADStall s : bays) {
-                if (s.id.equalsIgnoreCase(slotId)) {
-                    selectedStall = s;
-                    inspectorPanel.displayStall(s);
-                    repaint();
+        private int tileW() {
+            return Math.round(BASE_W * zoom);
+        }
+
+        private int tileH() {
+            return Math.round(BASE_H * zoom);
+        }
+
+        private boolean matchesFilter(Bay b) {
+            return "ALL".equals(activeFilter) || activeFilter.equals(b.category);
+        }
+
+        private Bay bayAt(Point p) {
+            for (Bay b : bays) if (b.bounds.contains(p)) return b;
+            return null;
+        }
+
+        /** Lays tiles out to fill the available width (responsive), grouping rows into aisles. */
+        private void layoutTiles(int width) {
+            int tw = tileW(), th = tileH();
+            cols = Math.max(4, (width - PAD * 2 + GAP) / (tw + GAP));
+            offsetX = Math.max(PAD, (width - (cols * (tw + GAP) - GAP)) / 2);
+            for (int i = 0; i < bays.size(); i++) {
+                int r = i / cols, c = i % cols;
+                int aisle = r / ROWS_PER_AISLE;
+                int x = offsetX + c * (tw + GAP);
+                int y = PAD + r * (th + GAP) + aisle * (LANE - GAP);
+                bays.get(i).bounds.setBounds(x, y, tw, th);
+            }
+        }
+
+        private int contentHeight(int width) {
+            int tw = tileW(), th = tileH();
+            int c = Math.max(4, (width - PAD * 2 + GAP) / (tw + GAP));
+            int rows = (bays.size() + c - 1) / c;
+            int aisles = (rows + ROWS_PER_AISLE - 1) / ROWS_PER_AISLE;
+            return PAD * 2 + rows * (th + GAP) + Math.max(0, aisles - 1) * (LANE - GAP);
+        }
+
+        @Override
+        public Dimension getPreferredSize() {
+            Container vp = getParent();
+            int w = vp instanceof JViewport ? Math.max(vp.getWidth(), 4 * (tileW() + GAP) + PAD * 2) : 900;
+            return new Dimension(w, contentHeight(w));
+        }
+
+        @Override
+        public String getToolTipText(MouseEvent e) {
+            Bay b = bayAt(e.getPoint());
+            if (b == null) return null;
+            StringBuilder sb = new StringBuilder("<html><b>").append(b.id).append("</b> · ").append(b.state.label)
+                    .append("<br>").append(b.typeLabel()).append(String.format(" · ₹%.0f/hr", b.rate));
+            if (b.occupiedLike() && b.plate != null) sb.append("<br>").append(PlateUtil.format(b.plate));
+            return sb.append("</html>").toString();
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            layoutTiles(getWidth());
+
+            if (bays.isEmpty()) {
+                g2.setColor(UITheme.TEXT_SECONDARY);
+                g2.setFont(UITheme.font(Font.PLAIN, 13));
+                String s = "No bays are configured on this level.";
+                g2.drawString(s, (getWidth() - g2.getFontMetrics().stringWidth(s)) / 2, 80);
+                g2.dispose();
+                return;
+            }
+
+            // drive lanes between aisles
+            int th = tileH();
+            int rows = (bays.size() + cols - 1) / cols;
+            for (int r = ROWS_PER_AISLE; r < rows; r += ROWS_PER_AISLE) {
+                Bay first = bays.get(r * cols);
+                int y = first.bounds.y - LANE / 2 - 1;
+                int x2 = offsetX + cols * (tileW() + GAP) - GAP;
+                g2.setColor(UITheme.BORDER_SUBTLE);
+                g2.setStroke(new BasicStroke(1.2f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, new float[]{10f, 8f}, 0f));
+                g2.drawLine(offsetX, y, x2, y);
+                g2.setStroke(new BasicStroke(1f));
+                g2.setFont(UITheme.font(Font.BOLD, 9));
+                String lane = "DRIVE LANE";
+                int lw = g2.getFontMetrics().stringWidth(lane) + 16;
+                int lx = offsetX + 14;
+                g2.setColor(UITheme.BG_CARD);
+                g2.fillRect(lx, y - 7, lw, 14);
+                g2.setColor(UITheme.TEXT_DISABLED);
+                g2.drawString(lane, lx + 8, y + 4);
+            }
+
+            for (Bay b : bays) paintTile(g2, b);
+            g2.dispose();
+        }
+
+        private void paintTile(Graphics2D g, Bay b) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            Rectangle r = b.bounds;
+            boolean dim = !matchesFilter(b);
+            if (dim) g2.setComposite(AlphaComposite.SrcOver.derive(0.22f));
+            boolean hover = b == hovered;
+            boolean sel = b == selected;
+            Color c = b.state.color();
+            float arc = 10;
+
+            RoundRectangle2D shape = new RoundRectangle2D.Float(r.x, r.y, r.width, r.height, arc, arc);
+            Color fill = b.state == BayState.AVAILABLE ? UITheme.blend(c, UITheme.BG_CARD, hover ? 0.10 : 0.05)
+                    : UITheme.blend(c, UITheme.BG_CARD, hover ? 0.24 : 0.16);
+            g2.setColor(fill);
+            g2.fill(shape);
+
+            if (b.state == BayState.MAINTENANCE) {
+                Shape old = g2.getClip();
+                g2.clip(shape);
+                g2.setColor(UITheme.alpha(UITheme.SLOT_MAINTENANCE, 40));
+                g2.setStroke(new BasicStroke(6f));
+                for (int k = -r.height; k < r.width; k += 14) g2.drawLine(r.x + k, r.y + r.height, r.x + k + r.height, r.y);
+                g2.setClip(old);
+            }
+
+            // status bar along the top edge
+            Shape old = g2.getClip();
+            g2.clip(shape);
+            g2.setColor(c);
+            g2.fillRect(r.x, r.y, r.width, 3);
+            g2.setClip(old);
+
+            g2.setStroke(new BasicStroke(1f));
+            g2.setColor(hover ? UITheme.blend(c, UITheme.BG_CARD, 0.75) : UITheme.blend(c, UITheme.BG_CARD, b.state == BayState.AVAILABLE ? 0.30 : 0.45));
+            g2.draw(new RoundRectangle2D.Float(r.x + 0.5f, r.y + 0.5f, r.width - 1, r.height - 1, arc, arc));
+
+            if (sel) {
+                g2.setStroke(new BasicStroke(2f));
+                g2.setColor(isFocusOwner() ? UITheme.ACCENT_TEXT : UITheme.ACCENT);
+                g2.draw(new RoundRectangle2D.Float(r.x - 3, r.y - 3, r.width + 6, r.height + 6, arc + 4, arc + 4));
+            }
+
+            float z = zoom;
+            int pad = Math.round(9 * z);
+            // id
+            g2.setFont(UITheme.font(Font.BOLD, Math.round(12 * z)));
+            g2.setColor(UITheme.TEXT_PRIMARY);
+            FontMetrics fm = g2.getFontMetrics();
+            g2.drawString(b.id, r.x + pad, r.y + pad + fm.getAscent());
+
+            // bay-type marker (top right)
+            int ms = Math.round(14 * z);
+            if (b.ev) {
+                VectorIconUtil.getIcon(IconType.LIGHTNING, ms, UITheme.SLOT_EV_TEXT).paintIcon(this, g2, r.x + r.width - pad - ms, r.y + pad);
+            } else if (b.accessible) {
+                VectorIconUtil.getIcon(IconType.WHEELCHAIR, ms, UITheme.SLOT_ACCESSIBLE).paintIcon(this, g2, r.x + r.width - pad - ms, r.y + pad);
+            }
+
+            // centre / bottom content
+            int bottomY = r.y + r.height - pad;
+            Color label = Badge.textFor(c);
+            g2.setFont(UITheme.font(Font.BOLD, Math.round(10 * z)));
+            FontMetrics sm = g2.getFontMetrics();
+            switch (b.state) {
+                case OCCUPIED:
+                case CHARGING: {
+                    int is = Math.round(22 * z);
+                    VectorIconUtil.getIcon(vehicleIcon(b.vehicleType), is, label).paintIcon(this, g2, r.x + pad - 1, bottomY - sm.getAscent() - is - Math.round(5 * z));
+                    String p = b.plate == null || b.plate.isBlank() ? "Unknown" : PlateUtil.format(b.plate);
+                    g2.setFont(UITheme.mono(Font.BOLD, Math.round(10 * z)));
+                    g2.setColor(UITheme.TEXT_BODY);
+                    g2.drawString(clip(p, g2.getFontMetrics(), r.width - pad * 2), r.x + pad, bottomY);
+                    if (b.state == BayState.CHARGING) {
+                        int bs = Math.round(12 * z);
+                        VectorIconUtil.getIcon(IconType.PLUG, bs, UITheme.SLOT_EV_TEXT).paintIcon(this, g2, r.x + r.width - pad - bs, bottomY - sm.getAscent() - is);
+                    }
                     break;
                 }
+                case RESERVED: {
+                    int is = Math.round(16 * z);
+                    VectorIconUtil.getIcon(IconType.CLOCK, is, label).paintIcon(this, g2, r.x + pad, bottomY - sm.getAscent() - is - Math.round(6 * z));
+                    g2.setColor(label);
+                    g2.drawString("Reserved", r.x + pad, bottomY);
+                    break;
+                }
+                case MAINTENANCE: {
+                    int is = Math.round(16 * z);
+                    VectorIconUtil.getIcon(IconType.WRENCH, is, UITheme.TEXT_SECONDARY).paintIcon(this, g2, r.x + pad, bottomY - sm.getAscent() - is - Math.round(6 * z));
+                    g2.setColor(UITheme.TEXT_SECONDARY);
+                    g2.drawString("Offline", r.x + pad, bottomY);
+                    break;
+                }
+                default: {
+                    g2.setColor(UITheme.alpha(label, 200));
+                    g2.drawString("Free", r.x + pad, bottomY);
+                    g2.setFont(UITheme.font(Font.PLAIN, Math.round(10 * z)));
+                    g2.setColor(UITheme.TEXT_TERTIARY);
+                    String rate = String.format("₹%.0f/h", b.rate);
+                    g2.drawString(rate, r.x + r.width - pad - g2.getFontMetrics().stringWidth(rate), bottomY);
+                }
+            }
+            g2.dispose();
+        }
+
+        // Scrollable: track viewport width so the grid reflows instead of scrolling sideways
+        @Override
+        public Dimension getPreferredScrollableViewportSize() {
+            return getPreferredSize();
+        }
+
+        @Override
+        public int getScrollableUnitIncrement(Rectangle visibleRect, int orientation, int direction) {
+            return 18;
+        }
+
+        @Override
+        public int getScrollableBlockIncrement(Rectangle visibleRect, int orientation, int direction) {
+            return visibleRect.height - 40;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportWidth() {
+            Container vp = getParent();
+            return vp instanceof JViewport && vp.getWidth() >= 4 * (tileW() + GAP) + PAD * 2;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportHeight() {
+            Container vp = getParent();
+            return vp instanceof JViewport && vp.getHeight() > contentHeight(vp.getWidth());
+        }
+    }
+
+    private static String clip(String s, FontMetrics fm, int max) {
+        if (s == null) return "";
+        if (fm.stringWidth(s) <= max) return s;
+        while (s.length() > 1 && fm.stringWidth(s + "…") > max) s = s.substring(0, s.length() - 1);
+        return s + "…";
+    }
+
+    private void checkout(Bay b) {
+        if (navigationHandler == null || b == null) return;
+        String q = b.ticket != null ? b.ticket.getTicketNumber() : b.plate;
+        navigationHandler.accept(q != null && !q.isBlank() ? "EXIT:" + q : "EXIT");
+    }
+
+    // =====================================================================================
+    // Bay inspector
+    // =====================================================================================
+    private class BayInspector extends JPanel implements Scrollable {
+        private final JLabel idLabel = new JLabel("—");
+        private final Badge statusBadge = new Badge("—", UITheme.TEXT_TERTIARY);
+        private final JLabel metaLabel = new JLabel(" ");
+        private final JPanel body = new JPanel();
+        private final ModernButton btnCheckout;
+        private final ModernButton btnDirections;
+        private final ModernButton btnIncident;
+        private final TypeBreakdown breakdown = new TypeBreakdown();
+        private Bay current;
+
+        BayInspector() {
+            setOpaque(false);
+            setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
+
+            RoundedPanel card = new RoundedPanel(UITheme.RADIUS_LG, UITheme.BG_CARD, UITheme.BORDER_SUBTLE);
+            card.setLayout(new BorderLayout(0, 16));
+            card.setBorder(BorderFactory.createEmptyBorder(18, 18, 18, 18));
+            card.setAlignmentX(LEFT_ALIGNMENT);
+
+            JPanel head = new JPanel();
+            head.setOpaque(false);
+            head.setLayout(new BoxLayout(head, BoxLayout.Y_AXIS));
+            JLabel cap = new JLabel("BAY INSPECTOR");
+            cap.setFont(UITheme.FONT_CAPTION);
+            cap.setForeground(UITheme.TEXT_TERTIARY);
+            cap.setAlignmentX(LEFT_ALIGNMENT);
+            head.add(cap);
+            head.add(Box.createVerticalStrut(8));
+            JPanel idRow = new JPanel(new BorderLayout(10, 0));
+            idRow.setOpaque(false);
+            idRow.setAlignmentX(LEFT_ALIGNMENT);
+            idLabel.setFont(UITheme.font(Font.BOLD, 24));
+            idLabel.setForeground(UITheme.TEXT_PRIMARY);
+            idRow.add(idLabel, BorderLayout.WEST);
+            JPanel badgeWrap = new JPanel(new GridBagLayout());
+            badgeWrap.setOpaque(false);
+            badgeWrap.add(statusBadge);
+            idRow.add(badgeWrap, BorderLayout.EAST);
+            head.add(idRow);
+            head.add(Box.createVerticalStrut(4));
+            metaLabel.setFont(UITheme.font(Font.PLAIN, 12));
+            metaLabel.setForeground(UITheme.TEXT_SECONDARY);
+            metaLabel.setAlignmentX(LEFT_ALIGNMENT);
+            head.add(metaLabel);
+            card.add(head, BorderLayout.NORTH);
+
+            body.setOpaque(false);
+            body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
+            card.add(body, BorderLayout.CENTER);
+
+            JPanel actions = new JPanel(new GridLayout(0, 1, 0, 8));
+            actions.setOpaque(false);
+            btnCheckout = new ModernButton("Check out & bill", VectorIconUtil.getIcon(IconType.ARROW_RIGHT, 14, Color.WHITE));
+            btnCheckout.setHorizontalTextPosition(SwingConstants.LEFT);
+            btnCheckout.setToolTipText("Open Checkout with this vehicle's ticket (Enter / double-click)");
+            btnCheckout.addActionListener(e -> checkout(current));
+            btnDirections = ModernButton.createSecondary("Send directions (simulated)",
+                    VectorIconUtil.getIcon(IconType.PHONE, 14, UITheme.TEXT_SECONDARY));
+            btnDirections.addActionListener(e -> sendDirections());
+            btnIncident = ModernButton.createGhost("Log incident (simulated)",
+                    VectorIconUtil.getIcon(IconType.ALERT, 14, UITheme.TEXT_SECONDARY));
+            btnIncident.addActionListener(e -> {
+                if (current == null) return;
+                int ok = JOptionPane.showConfirmDialog(FloorMapPanel.this,
+                        "File a security incident slip for bay " + current.id + "?\nThis is a simulated action; nothing is sent.",
+                        "Log incident", JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE);
+                if (ok == JOptionPane.OK_OPTION) Toast.success(FloorMapPanel.this, "Incident logged (simulated)", "Bay " + current.id);
+            });
+            actions.add(btnCheckout);
+            actions.add(btnDirections);
+            actions.add(btnIncident);
+            card.add(actions, BorderLayout.SOUTH);
+
+            add(card);
+            add(Box.createVerticalStrut(16));
+            breakdown.setAlignmentX(LEFT_ALIGNMENT);
+            add(breakdown);
+        }
+
+        void show(Bay b) {
+            current = b;
+            body.removeAll();
+            if (b == null) {
+                idLabel.setText("—");
+                statusBadge.set("No bay", UITheme.TEXT_TERTIARY);
+                metaLabel.setText("Select a bay on the map");
+                btnCheckout.setEnabled(false);
+                btnDirections.setEnabled(false);
+                btnIncident.setEnabled(false);
+                revalidate();
+                repaint();
+                return;
+            }
+            idLabel.setText(b.id);
+            statusBadge.set(b.state.label, b.state.color());
+            metaLabel.setText(String.format("Level %d · %s · ₹%.0f/hr", b.floor, b.typeLabel(), b.rate));
+            btnDirections.setEnabled(true);
+            btnIncident.setEnabled(true);
+            btnCheckout.setEnabled(b.occupiedLike());
+
+            switch (b.state) {
+                case OCCUPIED:
+                case CHARGING: {
+                    body.add(plateChip(b));
+                    body.add(Box.createVerticalStrut(14));
+                    body.add(divider());
+                    body.add(Box.createVerticalStrut(10));
+                    body.add(row("Vehicle", b.vehicleType != null ? b.vehicleType.getDisplayName() : "—"));
+                    if (b.ticket != null && b.ticket.getEntryTime() != null) {
+                        LocalDateTime entry = b.ticket.getEntryTime();
+                        long mins = Math.max(0, Duration.between(entry, LocalDateTime.now()).toMinutes());
+                        body.add(row("Ticket", b.ticket.getTicketNumber()));
+                        body.add(row("Entered", entry.format(ENTRY)));
+                        body.add(row("Parked for", (mins / 60) + "h " + (mins % 60) + "m"));
+                        double fee;
+                        try {
+                            fee = tariffService.calculateFee(b.ticket, LocalDateTime.now(), false, null).getTotalAmount();
+                        } catch (Exception e) {
+                            fee = -1;
+                        }
+                        body.add(Box.createVerticalStrut(10));
+                        body.add(divider());
+                        body.add(Box.createVerticalStrut(10));
+                        body.add(feeRow(fee >= 0 ? String.format("₹%,.2f", fee) : "—"));
+                    } else {
+                        body.add(row("Ticket", "No active ticket found"));
+                        body.add(note("The bay is marked occupied but has no open ticket. Check it at the exit gate."));
+                    }
+                    if (b.state == BayState.CHARGING) {
+                        body.add(Box.createVerticalStrut(8));
+                        body.add(note("An EV charging session is active. It must be stopped before checkout."));
+                    }
+                    break;
+                }
+                case RESERVED:
+                    body.add(note("Held for an advance booking. The bay is released automatically if the driver doesn't arrive within the grace period."));
+                    break;
+                case MAINTENANCE:
+                    body.add(note("Out of service. Vehicles will not be allocated to this bay until it is restored."));
+                    break;
+                default:
+                    body.add(note(b.ev ? "Free. Reserved for electric vehicles; charging is billed separately."
+                            : b.accessible ? "Free. Requires a valid disability (Divyang) parking permit."
+                            : "Free and ready for the next vehicle."));
+            }
+            body.add(Box.createVerticalGlue());
+            breakdown.refresh();
+            revalidate();
+            repaint();
+        }
+
+        private JComponent plateChip(Bay b) {
+            String plate = b.plate == null || b.plate.isBlank() ? "Unknown plate" : PlateUtil.format(b.plate);
+            String district = b.plate == null || b.plate.isBlank() ? "" : PlateUtil.district(b.plate);
+            JPanel wrap = new JPanel(new BorderLayout(12, 0));
+            wrap.setOpaque(false);
+            wrap.setAlignmentX(LEFT_ALIGNMENT);
+            JLabel icon = new JLabel(VectorIconUtil.getIcon(vehicleIcon(b.vehicleType), 22, Badge.textFor(b.state.color())));
+            icon.setPreferredSize(new Dimension(40, 40));
+            icon.setHorizontalAlignment(SwingConstants.CENTER);
+            icon.setOpaque(true);
+            icon.setBackground(UITheme.tint(b.state.color()));
+            icon.setBorder(new DarkTheme.RoundBorder(UITheme.tintBorder(b.state.color()), UITheme.RADIUS));
+            wrap.add(icon, BorderLayout.WEST);
+            JPanel txt = new JPanel();
+            txt.setOpaque(false);
+            txt.setLayout(new BoxLayout(txt, BoxLayout.Y_AXIS));
+            JLabel p = new JLabel(plate);
+            p.setFont(UITheme.mono(Font.BOLD, 16));
+            p.setForeground(UITheme.TEXT_PRIMARY);
+            JLabel d = new JLabel(district.isEmpty() ? (b.brand != null ? b.brand : " ") : district + (b.brand != null && !b.brand.isBlank() ? " · " + b.brand : ""));
+            d.setFont(UITheme.font(Font.PLAIN, 12));
+            d.setForeground(UITheme.TEXT_SECONDARY);
+            txt.add(p);
+            txt.add(Box.createVerticalStrut(2));
+            txt.add(d);
+            wrap.add(txt, BorderLayout.CENTER);
+            wrap.setMaximumSize(new Dimension(Integer.MAX_VALUE, 44));
+            return wrap;
+        }
+
+        private JComponent row(String k, String v) {
+            JPanel r = new JPanel(new BorderLayout(12, 0));
+            r.setOpaque(false);
+            r.setAlignmentX(LEFT_ALIGNMENT);
+            r.setBorder(BorderFactory.createEmptyBorder(5, 0, 5, 0));
+            JLabel kl = new JLabel(k);
+            kl.setFont(UITheme.font(Font.PLAIN, 13));
+            kl.setForeground(UITheme.TEXT_SECONDARY);
+            JLabel vl = new JLabel(v);
+            vl.setFont(UITheme.font(Font.BOLD, 13));
+            vl.setForeground(UITheme.TEXT_PRIMARY);
+            vl.setHorizontalAlignment(SwingConstants.RIGHT);
+            r.add(kl, BorderLayout.WEST);
+            r.add(vl, BorderLayout.EAST);
+            r.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+            return r;
+        }
+
+        private JComponent feeRow(String v) {
+            JPanel r = new JPanel(new BorderLayout(12, 0));
+            r.setOpaque(false);
+            r.setAlignmentX(LEFT_ALIGNMENT);
+            JLabel kl = new JLabel("Accrued fee");
+            kl.setFont(UITheme.font(Font.PLAIN, 13));
+            kl.setForeground(UITheme.TEXT_SECONDARY);
+            JLabel vl = new JLabel(v);
+            vl.setFont(UITheme.font(Font.BOLD, 20));
+            vl.setForeground(UITheme.TEXT_PRIMARY);
+            r.add(kl, BorderLayout.WEST);
+            r.add(vl, BorderLayout.EAST);
+            r.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
+            return r;
+        }
+
+        private JComponent note(String text) {
+            JLabel l = new JLabel("<html><div style='width:270px'>" + text + "</div></html>");
+            l.setFont(UITheme.font(Font.PLAIN, 13));
+            l.setForeground(UITheme.TEXT_SECONDARY);
+            l.setAlignmentX(LEFT_ALIGNMENT);
+            l.setBorder(BorderFactory.createEmptyBorder(4, 0, 4, 0));
+            return l;
+        }
+
+        private JComponent divider() {
+            JPanel line = new JPanel();
+            line.setBackground(UITheme.BORDER_SUBTLE);
+            line.setAlignmentX(LEFT_ALIGNMENT);
+            line.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
+            line.setPreferredSize(new Dimension(10, 1));
+            return line;
+        }
+
+        private void sendDirections() {
+            if (current == null) return;
+            String input = (String) JOptionPane.showInputDialog(FloorMapPanel.this,
+                    "Mobile number (10 digits) to receive directions to bay " + current.id + ":",
+                    "Send directions (simulated)", JOptionPane.PLAIN_MESSAGE, null, null, "");
+            if (input == null) return;
+            String clean = input.trim().replaceAll("[^0-9]", "");
+            if (clean.matches("^[6-9][0-9]{9}$")) {
+                Toast.success(FloorMapPanel.this, "Directions sent (simulated)", "Route to " + current.id + " sent to +91 " + clean);
+            } else {
+                Toast.error(FloorMapPanel.this, "Invalid mobile number", "Enter a 10-digit Indian mobile number starting with 6-9.");
             }
         }
 
         @Override
+        public Dimension getPreferredScrollableViewportSize() {
+            return getPreferredSize();
+        }
+
+        @Override
+        public int getScrollableUnitIncrement(Rectangle r, int o, int d) {
+            return 16;
+        }
+
+        @Override
+        public int getScrollableBlockIncrement(Rectangle r, int o, int d) {
+            return r.height - 40;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportWidth() {
+            return true;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportHeight() {
+            return false;
+        }
+    }
+
+    /** Occupancy by bay type for the active level (real counts). */
+    private class TypeBreakdown extends RoundedPanel {
+        private final JPanel rows = new JPanel();
+
+        TypeBreakdown() {
+            super(UITheme.RADIUS_LG, UITheme.BG_CARD, UITheme.BORDER_SUBTLE);
+            setLayout(new BorderLayout(0, 12));
+            setBorder(BorderFactory.createEmptyBorder(16, 18, 16, 18));
+            JLabel t = PageHeader.cardTitle("By bay type");
+            add(t, BorderLayout.NORTH);
+            rows.setOpaque(false);
+            rows.setLayout(new GridLayout(0, 1, 0, 10));
+            add(rows, BorderLayout.CENTER);
+            setMaximumSize(new Dimension(Integer.MAX_VALUE, 200));
+        }
+
+        void refresh() {
+            rows.removeAll();
+            List<Bay> list = bayGrid == null ? List.of() : bayGrid.bays;
+            String[][] cats = {{"STANDARD", "Standard"}, {"EV", "EV charging"}, {"ACCESSIBLE", "Accessible"}};
+            for (String[] c : cats) {
+                int total = 0, used = 0;
+                for (Bay b : list) {
+                    if (!c[0].equals(b.category)) continue;
+                    total++;
+                    if (b.state != BayState.AVAILABLE) used++;
+                }
+                rows.add(new TypeRow(c[1], used, total, c[0].equals("EV") ? UITheme.SLOT_EV : c[0].equals("ACCESSIBLE") ? UITheme.SLOT_ACCESSIBLE : UITheme.ACCENT));
+            }
+            revalidate();
+            repaint();
+        }
+    }
+
+    private static class TypeRow extends JComponent {
+        private final String label;
+        private final int used, total;
+        private final Color color;
+
+        TypeRow(String label, int used, int total, Color color) {
+            this.label = label;
+            this.used = used;
+            this.total = total;
+            this.color = color;
+            setPreferredSize(new Dimension(200, 34));
+        }
+
+        @Override
         protected void paintComponent(Graphics g) {
-            super.paintComponent(g);
             Graphics2D g2 = (Graphics2D) g.create();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            if (zoomScale != 1.0f) {
-                g2.scale(zoomScale, zoomScale);
+            g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            g2.setFont(UITheme.font(Font.PLAIN, 12));
+            g2.setColor(UITheme.TEXT_BODY);
+            g2.drawString(label, 0, 13);
+            String v = total == 0 ? "none" : used + " / " + total + " in use";
+            g2.setColor(UITheme.TEXT_SECONDARY);
+            g2.drawString(v, getWidth() - g2.getFontMetrics().stringWidth(v), 13);
+            int y = 22, h = 6, w = getWidth();
+            g2.setColor(UITheme.BG_ELEVATED);
+            g2.fillRoundRect(0, y, w, h, h, h);
+            if (total > 0 && used > 0) {
+                g2.setColor(color);
+                g2.fillRoundRect(0, y, Math.max(h, (int) Math.round(w * used / (double) total)), h, h, h);
             }
-
-            int w = getWidth();
-            int h = getHeight();
-
-            // 1. Blueprint Grid Dot Pattern (#cbd5e1 at 16x16)
-            g2.setColor(new Color(203, 213, 225, 140));
-            for (int x = 16; x < w; x += 16) {
-                for (int y = 16; y < h; y += 16) {
-                    g2.fillRect(x, y, 1, 1);
-                }
-            }
-
-            // 2. Left Vertical Dimension Markers (A, B, C, D, E)
-            int[] yAxis = {48, 120, 198, 254, 376};
-            String[] letters = {"A", "B", "C", "D", "E"};
-            for (int i = 0; i < letters.length; i++) {
-                int cy = yAxis[i];
-                g2.setColor(Color.WHITE);
-                g2.fillOval(10, cy - 9, 18, 18);
-                g2.setColor(new Color(203, 213, 225));
-                g2.setStroke(new BasicStroke(1.2f));
-                g2.drawOval(10, cy - 9, 18, 18);
-
-                g2.setColor(new Color(148, 163, 184)); // slate-400
-                g2.setFont(new Font("Consolas", Font.BOLD, 10));
-                g2.drawString(letters[i], 16, cy + 4);
-            }
-
-            // 3. Central Pedestrian Crosswalk & EV Corridor Header Label
-            g2.setColor(new Color(148, 163, 184)); // slate-400
-            g2.setFont(new Font("Consolas", Font.BOLD, 9));
-            String crosswalkLabel = "▲ PEDESTRIAN CROSSWALK & EV CORRIDOR ▲";
-            FontMetrics fm = g2.getFontMetrics();
-            g2.drawString(crosswalkLabel, (w - fm.stringWidth(crosswalkLabel)) / 2, 165);
-
-            // 4. Inbound Roadway (Dark Asphalt)
-            drawInboundRoadway(g2, 44, 172, w - 88, 44);
-
-            // 5. Middle Row Stalls (C-1 to C-12 drawn via stall loop) + Substation & HVAC Enclosure
-            drawSubstationHVAC(g2, 630, 224, 340, 60);
-
-            // 6. Outbound Roadway (Dark Asphalt)
-            drawOutboundRoadway(g2, 44, 292, w - 88, 44);
-
-            // 7. Render All Bay Stalls
-            for (CADStall stall : bays) {
-                drawStall(g2, stall);
-            }
-
             g2.dispose();
         }
-
-        private void drawInboundRoadway(Graphics2D g2, int x, int y, int rw, int rh) {
-            // Road asphalt slab
-            g2.setColor(new Color(15, 23, 42)); // slate-900
-            g2.fillRoundRect(x, y, rw, rh, 8, 8);
-
-            // Gate 1 In Left Barrier Indicator
-            g2.setColor(new Color(16, 185, 129)); // emerald-500
-            g2.fillRect(x + 76, y + 2, 4, rh - 4);
-
-            // Gate 1 In Badge
-            g2.setColor(new Color(30, 58, 138, 220)); // blue-900
-            g2.fillRoundRect(x + 8, y + (rh - 20) / 2, 62, 20, 4, 4);
-            g2.setColor(new Color(96, 165, 250)); // blue-400
-            g2.setStroke(new BasicStroke(1.0f));
-            g2.drawRoundRect(x + 8, y + (rh - 20) / 2, 62, 20, 4, 4);
-
-            g2.setColor(new Color(191, 219, 254)); // blue-200
-            g2.setFont(new Font("Consolas", Font.BOLD, 9));
-            g2.drawString("GATE 1 IN", x + 12, y + (rh - 20) / 2 + 14);
-
-            // Inbound Lane Arrow + Text
-            g2.setColor(new Color(96, 165, 250)); // blue-400
-            drawArrow(g2, x + 90, y + rh / 2, x + 104, y + rh / 2);
-            g2.setColor(new Color(226, 232, 240));
-            g2.setFont(new Font("Consolas", Font.BOLD, 9));
-            g2.drawString("INBOUND LANE >>", x + 110, y + rh / 2 + 3);
-
-            // Zebra Crosswalk (Vertical Repeating Stripes)
-            int zx = x + 230;
-            int zw = 44;
-            g2.setColor(new Color(30, 41, 59));
-            g2.fillRect(zx, y, zw, rh);
-            g2.setColor(Color.WHITE);
-            for (int sx = zx + 2; sx < zx + zw - 4; sx += 6) {
-                g2.fillRect(sx, y + 2, 3, rh - 4);
-            }
-
-            // Dashed Centerline
-            Stroke dashed = new BasicStroke(2.0f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10.0f, new float[]{10.0f, 8.0f}, 0.0f);
-            g2.setStroke(dashed);
-            g2.setColor(new Color(148, 163, 184));
-            g2.drawLine(zx + zw + 10, y + rh / 2, x + rw - 14, y + rh / 2);
-        }
-
-        private void drawSubstationHVAC(Graphics2D g2, int x, int y, int sw, int sh) {
-            // Container box
-            g2.setColor(Color.WHITE);
-            g2.fillRoundRect(x, y, sw, sh, 8, 8);
-
-            // Hatch Pattern (-45 deg repeating lines)
-            g2.setColor(new Color(226, 232, 240, 160));
-            Shape oldClip = g2.getClip();
-            g2.clip(new RoundRectangle2D.Float(x, y, sw, sh, 8, 8));
-            for (int d = -sh; d < sw + sh; d += 8) {
-                g2.drawLine(x + d, y, x + d + sh, y + sh);
-            }
-            g2.setClip(oldClip);
-
-            g2.setColor(new Color(148, 163, 184)); // slate-400 border
-            g2.setStroke(new BasicStroke(1.5f));
-            g2.drawRoundRect(x, y, sw, sh, 8, 8);
-
-            // Text
-            g2.setColor(new Color(15, 23, 42)); // slate-800
-            g2.setFont(new Font("Segoe UI", Font.BOLD, 10));
-            g2.drawString("SUBSTATION & HVAC", x + 12, y + 18);
-
-            g2.setColor(new Color(100, 116, 139)); // slate-500
-            g2.setFont(new Font("Segoe UI", Font.PLAIN, 9));
-            g2.drawString("11kV Transformer Deck • Plant 02", x + 12, y + 32);
-
-            g2.setColor(new Color(29, 78, 216)); // blue-700
-            g2.setFont(new Font("Consolas", Font.BOLD, 9));
-            g2.drawString("TRANSFORMER 11 kV / 415 V", x + 12, y + 48);
-
-            // Right Warning Badge
-            int iconX = x + sw - 42;
-            int iconY = y + (sh - 30) / 2;
-            g2.setColor(Color.WHITE);
-            g2.fillOval(iconX, iconY, 30, 30);
-            g2.setColor(new Color(59, 130, 246));
-            g2.setStroke(new BasicStroke(2.0f));
-            g2.drawOval(iconX, iconY, 30, 30);
-
-            ImageIcon evBadge = ImageLoader.loadIcon("icons/slots/ev_charging.png", 18, 18);
-            if (evBadge != null && evBadge.getImage() != null) {
-                g2.drawImage(evBadge.getImage(), iconX + 6, iconY + 6, 18, 18, null);
-            } else {
-                drawLightningBolt(g2, iconX + 15f, iconY + 15f, 1.0f, new Color(245, 158, 11));
-            }
-        }
-
-        private void drawOutboundRoadway(Graphics2D g2, int x, int y, int rw, int rh) {
-            // Road asphalt slab
-            g2.setColor(new Color(15, 23, 42)); // slate-900
-            g2.fillRoundRect(x, y, rw, rh, 8, 8);
-
-            // Dashed Centerline on left
-            Stroke dashed = new BasicStroke(2.0f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10.0f, new float[]{10.0f, 8.0f}, 0.0f);
-            g2.setStroke(dashed);
-            g2.setColor(new Color(148, 163, 184));
-            g2.drawLine(x + 16, y + rh / 2, x + rw - 220, y + rh / 2);
-
-            // Outbound Arrow + Text
-            g2.setColor(new Color(96, 165, 250)); // blue-400
-            drawArrow(g2, x + rw - 200, y + rh / 2, x + rw - 214, y + rh / 2);
-
-            g2.setColor(new Color(226, 232, 240));
-            g2.setFont(new Font("Consolas", Font.BOLD, 9));
-            g2.drawString("<< OUTBOUND TO EXIT GATE 2", x + rw - 190, y + rh / 2 + 3);
-        }
-
-        private void drawStall(Graphics2D g2, CADStall stall) {
-            Rectangle r = stall.bounds;
-            boolean isSelected = (stall == selectedStall);
-
-            // Filter check (dimming unselected)
-            boolean dim = false;
-            if ("STANDARD".equals(activeFilter) && (stall.isVip || stall.isEv)) dim = true;
-            if ("EV".equals(activeFilter) && !stall.isEv) dim = true;
-            if ("ACCESSIBLE".equals(activeFilter) && !stall.isVip) dim = true;
-
-            Composite origComp = g2.getComposite();
-            if (dim) {
-                g2.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.25f));
-            }
-
-            if (stall.isMaintenance) {
-                // Maintenance / Out of Service Slate Hatch
-                g2.setColor(new Color(241, 245, 249)); // slate-100
-                g2.fillRoundRect(r.x, r.y, r.width, r.height, 6, 6);
-                g2.setColor(new Color(100, 116, 139)); // slate-500
-                g2.setStroke(new BasicStroke(1.5f));
-                g2.drawRoundRect(r.x, r.y, r.width, r.height, 6, 6);
-
-                // Caution diagonal stripes
-                g2.setColor(new Color(203, 213, 225));
-                for (int i = -r.height; i < r.width; i += 8) {
-                    g2.drawLine(Math.max(r.x, r.x + i), r.y, Math.min(r.x + r.width, r.x + i + r.height), r.y + r.height);
-                }
-
-                g2.setColor(new Color(51, 65, 85));
-                g2.setFont(new Font("Consolas", Font.BOLD, 8));
-                g2.drawString(stall.id, r.x + 3, r.y + 11);
-
-                g2.setColor(new Color(100, 116, 139));
-                g2.setFont(new Font("Segoe UI", Font.BOLD, 7));
-                g2.drawString("OFFLINE", r.x + (r.width - 26) / 2, r.y + r.height - 4);
-
-            } else if (stall.isVip) {
-                // Iris VIP/ADA
-                g2.setColor(new Color(79, 70, 229)); // indigo-600
-                g2.fillRoundRect(r.x, r.y, r.width, r.height, 6, 6);
-                g2.setColor(new Color(67, 56, 202)); // indigo-700
-                g2.setStroke(new BasicStroke(1.5f));
-                g2.drawRoundRect(r.x, r.y, r.width, r.height, 6, 6);
-
-                g2.setColor(Color.WHITE);
-                g2.setFont(new Font("Consolas", Font.BOLD, 9));
-                g2.drawString(stall.id, r.x + 3, r.y + 12);
-
-                ImageIcon badge = ImageLoader.loadIcon("icons/slots/handicapped_badge.png", 18, 18);
-                if (badge != null && badge.getImage() != null) {
-                    g2.drawImage(badge.getImage(), r.x + (r.width - 18) / 2, r.y + 16, 18, 18, null);
-                } else {
-                    g2.setFont(new Font("Segoe UI", Font.BOLD, 10));
-                    g2.drawString("VIP", r.x + (r.width - 18) / 2, r.y + 28);
-                }
-
-                g2.setColor(new Color(199, 210, 254)); // indigo-200
-                g2.setFont(new Font("Segoe UI", Font.PLAIN, 7));
-                g2.drawString("VACANT", r.x + 3, r.y + r.height - 4);
-
-            } else if (stall.isReserved) {
-                // RSVP Slate
-                g2.setColor(new Color(241, 245, 249)); // slate-100
-                g2.fillRoundRect(r.x, r.y, r.width, r.height, 6, 6);
-                g2.setColor(new Color(203, 213, 225)); // slate-300
-                g2.setStroke(new BasicStroke(1.5f));
-                g2.drawRoundRect(r.x, r.y, r.width, r.height, 6, 6);
-
-                g2.setColor(new Color(71, 85, 105)); // slate-600
-                g2.setFont(new Font("Consolas", Font.BOLD, 8));
-                g2.drawString(stall.id, r.x + 3, r.y + 12);
-
-                g2.setColor(new Color(100, 116, 139));
-                g2.setFont(new Font("Segoe UI", Font.BOLD, 7));
-                g2.drawString("RSVP", r.x + (r.width - 20) / 2, r.y + r.height - 4);
-
-            } else if (stall.isOccupied) {
-                // Crimson Active
-                g2.setColor(new Color(254, 226, 226)); // red-100
-                g2.fillRoundRect(r.x, r.y, r.width, r.height, 6, 6);
-                g2.setColor(new Color(248, 113, 113)); // red-400
-                g2.setStroke(new BasicStroke(1.5f));
-                g2.drawRoundRect(r.x, r.y, r.width, r.height, 6, 6);
-
-                g2.setColor(new Color(153, 27, 27)); // red-800
-                g2.setFont(new Font("Consolas", Font.BOLD, 8));
-                g2.drawString(stall.id, r.x + 3, r.y + 11);
-
-                // Car Icon in center
-                ImageIcon icon = ImageLoader.getVehicleIcon(stall.vehicleType, 22, 22);
-                if (icon != null && icon.getImage() != null) {
-                    g2.drawImage(icon.getImage(), r.x + (r.width - 22) / 2, r.y + 16, 22, 22, null);
-                } else {
-                    g2.setColor(new Color(220, 38, 38));
-                    g2.fillRoundRect(r.x + 5, r.y + 16, r.width - 10, 20, 4, 4);
-                }
-
-                g2.setColor(new Color(220, 38, 38)); // red-600
-                g2.setFont(new Font("Segoe UI", Font.BOLD, 7));
-                g2.drawString("ACTIVE", r.x + (r.width - 22) / 2, r.y + r.height - 4);
-
-            } else {
-                // Mint Vacant
-                g2.setColor(new Color(209, 250, 229)); // emerald-100
-                g2.fillRoundRect(r.x, r.y, r.width, r.height, 6, 6);
-                g2.setColor(new Color(52, 211, 153)); // emerald-400
-                g2.setStroke(new BasicStroke(1.5f));
-                g2.drawRoundRect(r.x, r.y, r.width, r.height, 6, 6);
-
-                g2.setColor(new Color(6, 95, 70)); // emerald-800
-                g2.setFont(new Font("Consolas", Font.BOLD, 8));
-                g2.drawString(stall.id, r.x + 3, r.y + 11);
-
-                if (stall.isEv) {
-                    ImageIcon evIcon = ImageLoader.loadIcon("icons/slots/ev_charging.png", 14, 14);
-                    if (evIcon != null && evIcon.getImage() != null) {
-                        g2.drawImage(evIcon.getImage(), r.x + (r.width - 14) / 2, r.y + 16, 14, 14, null);
-                    } else {
-                        drawLightningBolt(g2, r.x + r.width / 2f, r.y + 24f, 0.8f, new Color(16, 185, 129));
-                    }
-                }
-
-                g2.setColor(new Color(5, 150, 105)); // emerald-600
-                g2.setFont(new Font("Segoe UI", Font.BOLD, 7));
-                g2.drawString("VACANT", r.x + (r.width - 26) / 2, r.y + r.height - 4);
-            }
-
-            // Selection dashed ring
-            if (isSelected) {
-                g2.setColor(new Color(37, 99, 235)); // blue-600
-                Stroke dashed = new BasicStroke(2.0f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10.0f, new float[]{4.0f, 2.0f}, 0.0f);
-                g2.setStroke(dashed);
-                g2.drawRoundRect(r.x - 2, r.y - 2, r.width + 4, r.height + 4, 8, 8);
-            }
-
-            g2.setComposite(origComp);
-        }
-
-        private void drawLightningBolt(Graphics2D g2, float cx, float cy, float scale, Color color) {
-            Graphics2D g = (Graphics2D) g2.create();
-            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g.setColor(color);
-            java.awt.geom.Path2D.Float p = new java.awt.geom.Path2D.Float();
-            p.moveTo(cx + 1 * scale, cy - 8 * scale);
-            p.lineTo(cx - 5 * scale, cy + 0 * scale);
-            p.lineTo(cx - 1 * scale, cy + 0 * scale);
-            p.lineTo(cx - 3 * scale, cy + 8 * scale);
-            p.lineTo(cx + 5 * scale, cy - 1 * scale);
-            p.lineTo(cx + 1 * scale, cy - 1 * scale);
-            p.closePath();
-            g.fill(p);
-            g.dispose();
-        }
-
-        private void drawArrow(Graphics2D g2, int x1, int y1, int x2, int y2) {
-            g2.setStroke(new BasicStroke(2.0f));
-            g2.drawLine(x1, y1, x2, y2);
-            if (x2 > x1) {
-                g2.drawLine(x2 - 4, y2 - 3, x2, y2);
-                g2.drawLine(x2 - 4, y2 + 3, x2, y2);
-            } else {
-                g2.drawLine(x2 + 4, y2 - 3, x2, y2);
-                g2.drawLine(x2 + 4, y2 + 3, x2, y2);
-            }
-        }
     }
 
-    // =========================================================================
-    // INNER CLASS: Bay Stall Inspector & Environmental Telemetry Panel (Right Side)
-    // =========================================================================
-    private class BayInspectorPanel extends JPanel {
+    // =====================================================================================
+    // Small components
+    // =====================================================================================
 
-        private JLabel stallIdLabel;
-        private JLabel statusBadgeLabel;
-        private JLabel vehicleAvatarLabel;
-        private JLabel plateNumberLabel;
-        private JLabel modelLabel;
-        private JLabel tariffLabel;
-        private JLabel inTimeLabel;
-        private JLabel dwellTimeLabel;
-        private JLabel feeLabel;
-        private CCTVStreamPanel cameraPanel;
+    /** JComponent with a real AccessibleContext so screen readers can name custom-painted controls. */
+    private abstract static class AccessibleComponent extends JComponent {
+        String accessibleName = "";
 
-        public BayInspectorPanel() {
-            setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
-            setOpaque(false);
-
-            initInspector();
-        }
-
-        private void initInspector() {
-            // --- CARD 1: Bay Stall Inspector Card ---
-            RoundedPanel inspectorCard = new RoundedPanel(8, Color.WHITE, new Color(226, 232, 240));
-            inspectorCard.setLayout(new BoxLayout(inspectorCard, BoxLayout.Y_AXIS));
-            inspectorCard.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
-
-            // Inspector Header: Search Icon + Title + Status Badge
-            JPanel topRow = new JPanel(new BorderLayout());
-            topRow.setOpaque(false);
-
-            JPanel titleGroup = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-            titleGroup.setOpaque(false);
-            JLabel searchIcon = new JLabel(ImageLoader.getNavIcon("search", 14));
-            stallIdLabel = new JLabel("Bay Stall Inspector (G-08)");
-            stallIdLabel.setFont(new Font("Segoe UI", Font.BOLD, 13));
-            stallIdLabel.setForeground(new Color(15, 23, 42)); // slate-800
-            titleGroup.add(searchIcon);
-            titleGroup.add(stallIdLabel);
-            topRow.add(titleGroup, BorderLayout.WEST);
-
-            statusBadgeLabel = new JLabel("OCCUPIED");
-            statusBadgeLabel.setFont(new Font("Segoe UI", Font.BOLD, 10));
-            statusBadgeLabel.setForeground(new Color(239, 68, 68)); // red-600
-            statusBadgeLabel.setBackground(new Color(254, 226, 226)); // red-100
-            statusBadgeLabel.setOpaque(true);
-            statusBadgeLabel.setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createLineBorder(new Color(254, 202, 202), 1, true),
-                    BorderFactory.createEmptyBorder(2, 6, 2, 6)
-            ));
-            topRow.add(statusBadgeLabel, BorderLayout.EAST);
-
-            inspectorCard.add(topRow);
-            inspectorCard.add(Box.createVerticalStrut(10));
-
-            // License Plate Callout Section
-            JPanel plateContainer = new JPanel(new BorderLayout(10, 0));
-            plateContainer.setBackground(new Color(255, 251, 235)); // amber-50/50
-            plateContainer.setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createLineBorder(new Color(253, 230, 138), 1, true),
-                    BorderFactory.createEmptyBorder(8, 8, 8, 8)
-            ));
-
-            // Vehicle Avatar Badge
-            vehicleAvatarLabel = new JLabel() {
-                @Override
-                protected void paintComponent(Graphics g) {
-                    Graphics2D g2 = (Graphics2D) g.create();
-                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                    g2.setColor(Color.WHITE);
-                    g2.fillOval(0, 0, getWidth(), getHeight());
-                    g2.setColor(new Color(96, 165, 250)); // blue-400
-                    g2.setStroke(new BasicStroke(2.0f));
-                    g2.drawOval(0, 0, getWidth() - 1, getHeight() - 1);
-                    g2.dispose();
-                    super.paintComponent(g);
-                }
-            };
-            vehicleAvatarLabel.setPreferredSize(new Dimension(38, 38));
-            vehicleAvatarLabel.setIcon(ImageLoader.getVehicleIcon(VehicleType.CAR, 24, 24));
-            vehicleAvatarLabel.setHorizontalAlignment(SwingConstants.CENTER);
-            plateContainer.add(vehicleAvatarLabel, BorderLayout.WEST);
-
-            // Embossed Indian License Plate
-            JPanel plateBox = new JPanel();
-            plateBox.setLayout(new BoxLayout(plateBox, BoxLayout.Y_AXIS));
-            plateBox.setOpaque(false);
-
-            JPanel embossedPlate = new JPanel(new GridBagLayout());
-            embossedPlate.setBackground(new Color(251, 191, 36)); // amber-400
-            embossedPlate.setBorder(BorderFactory.createLineBorder(new Color(217, 119, 6), 2, true)); // amber-600
-            embossedPlate.setPreferredSize(new Dimension(160, 28));
-
-            plateNumberLabel = new JLabel("UP32 AB 1234");
-            plateNumberLabel.setFont(new Font("Consolas", Font.BOLD, 14));
-            plateNumberLabel.setForeground(new Color(2, 6, 23)); // slate-950
-            embossedPlate.add(plateNumberLabel);
-            plateBox.add(embossedPlate);
-
-            JLabel anprMeta = new JLabel("ANPR 99.4% • FastTag Active", SwingConstants.CENTER) {
-                @Override
-                protected void paintComponent(Graphics g) {
-                    Graphics2D g2 = (Graphics2D) g.create();
-                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                    g2.setColor(new Color(4, 120, 87));
-                    g2.setStroke(new BasicStroke(2.0f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-                    int cy = getHeight() / 2;
-                    int startX = 6;
-                    g2.drawLine(startX, cy, startX + 3, cy + 3);
-                    g2.drawLine(startX + 3, cy + 3, startX + 9, cy - 3);
-                    g2.dispose();
-                    super.paintComponent(g);
-                }
-            };
-            anprMeta.setFont(new Font("Segoe UI", Font.BOLD, 10));
-            anprMeta.setForeground(new Color(4, 120, 87)); // emerald-700
-            anprMeta.setAlignmentX(Component.CENTER_ALIGNMENT);
-            anprMeta.setBorder(BorderFactory.createEmptyBorder(3, 16, 0, 0));
-            plateBox.add(anprMeta);
-
-            plateContainer.add(plateBox, BorderLayout.CENTER);
-            inspectorCard.add(plateContainer);
-            inspectorCard.add(Box.createVerticalStrut(10));
-
-            // Optical Camera Feed Viewport (Simulated)
-            cameraPanel = new CCTVStreamPanel();
-            inspectorCard.add(cameraPanel);
-            inspectorCard.add(Box.createVerticalStrut(10));
-
-            // Telemetry Details List
-            JPanel details = new JPanel();
-            details.setLayout(new BoxLayout(details, BoxLayout.Y_AXIS));
-            details.setOpaque(false);
-            details.setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createMatteBorder(1, 0, 0, 0, new Color(241, 245, 249)),
-                    BorderFactory.createEmptyBorder(6, 0, 6, 0)
-            ));
-
-            modelLabel = addRow(details, "Vehicle Model", "Tesla Model 3 (Sedan)", false);
-            tariffLabel = addRow(details, "Assigned Tariff", "\u20B960.00 / hr (Tier 1)", false);
-            inTimeLabel = addRow(details, "Inbound Timestamp", "14:18:22 (Today)", false);
-            dwellTimeLabel = addRow(details, "Elapsed Dwell Time", "42m 18s", true);
-            feeLabel = addRow(details, "Accrued Parking Fee", "\u20B960.00", false);
-
-            inspectorCard.add(details);
-            inspectorCard.add(Box.createVerticalStrut(10));
-
-            // Sidebar Action Buttons
-            ModernButton btnWayfinding = new ModernButton("Send Directions to Phone (Simulated)",
-                    com.smartparking.ui.util.VectorIconUtil.getIcon(com.smartparking.ui.util.VectorIconUtil.IconType.PHONE, 14, Color.WHITE),
-                    new Color(37, 99, 235), new Color(29, 78, 216), Color.WHITE);
-            btnWayfinding.setFont(new Font("Segoe UI", Font.BOLD, 11));
-            btnWayfinding.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
-            btnWayfinding.addActionListener(e -> {
-                String input = JOptionPane.showInputDialog(FloorMapPanel.this,
-                        "Enter 10-digit Indian Mobile Number for directions to " + stallIdLabel.getText() + ":",
-                        "9876543210");
-                if (input != null && !input.trim().isEmpty()) {
-                    String clean = input.trim().replaceAll("[^0-9]", "");
-                    if (clean.matches("^[6-9][0-9]{9}$")) {
-                        JOptionPane.showMessageDialog(FloorMapPanel.this,
-                                "Simulated SMS sent: Turn-by-turn route to " + stallIdLabel.getText() + " dispatched to +91 " + clean,
-                                "Directions Dispatched (Simulated)", JOptionPane.INFORMATION_MESSAGE);
-                    } else {
-                        JOptionPane.showMessageDialog(FloorMapPanel.this,
-                                "Invalid mobile number. Please enter a valid 10-digit Indian mobile number starting with 6-9.",
-                                "Validation Error", JOptionPane.WARNING_MESSAGE);
+        @Override
+        public javax.accessibility.AccessibleContext getAccessibleContext() {
+            if (accessibleContext == null) {
+                accessibleContext = new AccessibleJComponent() {
+                    @Override
+                    public javax.accessibility.AccessibleRole getAccessibleRole() {
+                        return javax.accessibility.AccessibleRole.PUSH_BUTTON;
                     }
-                }
-            });
-            inspectorCard.add(btnWayfinding);
-            inspectorCard.add(Box.createVerticalStrut(6));
 
-            JPanel actionGrid = new JPanel(new GridLayout(1, 2, 8, 0));
-            actionGrid.setOpaque(false);
-
-            ModernButton btnIncident = new ModernButton("Incident Slip (Simulated)", null,
-                    new Color(241, 245, 249), new Color(226, 232, 240), new Color(51, 65, 85));
-            btnIncident.setFont(new Font("Segoe UI", Font.BOLD, 10));
-            btnIncident.addActionListener(e -> JOptionPane.showMessageDialog(FloorMapPanel.this,
-                    "Security incident slip filed for stall " + stallIdLabel.getText() + " (Simulated).",
-                    "Incident Slip", JOptionPane.INFORMATION_MESSAGE));
-
-            ModernButton btnExit = new ModernButton("Checkout & Bill \u2192", null,
-                    new Color(220, 38, 38), new Color(185, 28, 28), Color.WHITE);
-            btnExit.setFont(new Font("Segoe UI", Font.BOLD, 11));
-            btnExit.addActionListener(e -> {
-                if (navigationHandler != null) {
-                    navigationHandler.accept("CHECKOUT");
-                }
-            });
-
-            actionGrid.add(btnIncident);
-            actionGrid.add(btnExit);
-            inspectorCard.add(actionGrid);
-
-            add(inspectorCard);
-            add(Box.createVerticalStrut(10));
-
-            // --- CARD 2: Floor Sensors & Environmental Telemetry ---
-            RoundedPanel telemetryCard = new RoundedPanel(8, Color.WHITE, new Color(226, 232, 240));
-            telemetryCard.setLayout(new BoxLayout(telemetryCard, BoxLayout.Y_AXIS));
-            telemetryCard.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
-
-            JLabel teleTitle = new JLabel("Floor Sensors & Environmental Telemetry");
-            teleTitle.setFont(new Font("Segoe UI", Font.BOLD, 12));
-            teleTitle.setForeground(new Color(30, 41, 59)); // slate-800
-            telemetryCard.add(teleTitle);
-            telemetryCard.add(Box.createVerticalStrut(8));
-
-            JPanel sensorGrid = new JPanel(new GridLayout(1, 2, 8, 0));
-            sensorGrid.setOpaque(false);
-            sensorGrid.add(createSensorMetricCard("CO LEVEL", "12 ppm", "Normal (< 25)", new Color(16, 185, 129)));
-            sensorGrid.add(createSensorMetricCard("VENTILATION", "Stage 1", "Fans 450 RPM", new Color(37, 99, 235)));
-            telemetryCard.add(sensorGrid);
-            telemetryCard.add(Box.createVerticalStrut(8));
-
-            JPanel sprinklerRow = new JPanel(new BorderLayout());
-            sprinklerRow.setOpaque(false);
-            sprinklerRow.setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createMatteBorder(1, 0, 0, 0, new Color(241, 245, 249)),
-                    BorderFactory.createEmptyBorder(4, 0, 0, 0)
-            ));
-
-            JLabel spkLeft = new JLabel("\u25CF Fire Isolation Sprinklers: ARMED");
-            spkLeft.setFont(new Font("Segoe UI", Font.BOLD, 11));
-            spkLeft.setForeground(new Color(16, 185, 129)); // emerald-500
-
-            JLabel spkRight = new JLabel("1.2 bar");
-            spkRight.setFont(new Font("Consolas", Font.PLAIN, 10));
-            spkRight.setForeground(new Color(100, 116, 139));
-
-            sprinklerRow.add(spkLeft, BorderLayout.WEST);
-            sprinklerRow.add(spkRight, BorderLayout.EAST);
-            telemetryCard.add(sprinklerRow);
-
-            add(telemetryCard);
-        }
-
-        private JLabel addRow(JPanel container, String label, String val, boolean isBlue) {
-            JPanel r = new JPanel(new BorderLayout());
-            r.setOpaque(false);
-            r.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
-
-            JLabel l = new JLabel(label);
-            l.setFont(new Font("Segoe UI", Font.PLAIN, 11));
-            l.setForeground(new Color(100, 116, 139));
-
-            JLabel v = new JLabel(val);
-            v.setFont(new Font(isBlue ? "Consolas" : "Segoe UI", Font.BOLD, 11));
-            v.setForeground(isBlue ? new Color(37, 99, 235) : new Color(15, 23, 42));
-
-            r.add(l, BorderLayout.WEST);
-            r.add(v, BorderLayout.EAST);
-            container.add(r);
-            return v;
-        }
-
-        private JPanel createSensorMetricCard(String title, String val, String sub, Color valColor) {
-            JPanel p = new JPanel();
-            p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
-            p.setBackground(new Color(248, 250, 252));
-            p.setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createLineBorder(new Color(226, 232, 240), 1, true),
-                    BorderFactory.createEmptyBorder(4, 8, 4, 8)
-            ));
-
-            JLabel t = new JLabel(title);
-            t.setFont(new Font("Segoe UI", Font.BOLD, 9));
-            t.setForeground(new Color(100, 116, 139));
-
-            JLabel v = new JLabel(val);
-            v.setFont(new Font("Consolas", Font.BOLD, 13));
-            v.setForeground(valColor);
-
-            JLabel s = new JLabel(sub);
-            s.setFont(new Font("Segoe UI", Font.PLAIN, 9));
-            s.setForeground(new Color(148, 163, 184));
-
-            p.add(t);
-            p.add(v);
-            p.add(s);
-            return p;
-        }
-
-        public void displayStall(CADStall stall) {
-            stallIdLabel.setText("Bay Stall Inspector (" + stall.id + ")");
-
-            if (stall.isMaintenance) {
-                statusBadgeLabel.setText("MAINTENANCE");
-                statusBadgeLabel.setForeground(new Color(100, 116, 139));
-                statusBadgeLabel.setBackground(new Color(241, 245, 249));
-                plateNumberLabel.setText("[OFFLINE]");
-                modelLabel.setText("Bay Under Maintenance");
-                tariffLabel.setText("\u2014");
-                inTimeLabel.setText("N/A");
-                dwellTimeLabel.setText("0m 0s");
-                feeLabel.setText("\u2014");
-                cameraPanel.setCameraState(false, "", null);
-                vehicleAvatarLabel.setIcon(null);
-            } else if (stall.isOccupied) {
-                statusBadgeLabel.setText("OCCUPIED");
-                statusBadgeLabel.setForeground(new Color(239, 68, 68));
-                statusBadgeLabel.setBackground(new Color(254, 226, 226));
-                String displayPlate = stall.plate.isEmpty() ? "UP32AB1234" : stall.plate;
-                plateNumberLabel.setText(PlateUtil.format(displayPlate) + " [" + PlateUtil.district(displayPlate) + "]");
-                modelLabel.setText(stall.vehicleModel);
-                tariffLabel.setText(String.format("\u20B9%.2f / hr", stall.tariff));
-                inTimeLabel.setText(stall.inTimeStr);
-                dwellTimeLabel.setText(stall.dwellTimeStr);
-                feeLabel.setText(String.format("\u20B9%.2f", stall.accruedFee));
-                cameraPanel.setCameraState(true, stall.plate, stall.vehicleType);
-                vehicleAvatarLabel.setIcon(ImageLoader.getVehicleIcon(stall.vehicleType, 24, 24));
-            } else if (stall.isReserved) {
-                statusBadgeLabel.setText("RESERVED");
-                statusBadgeLabel.setForeground(new Color(217, 119, 6));
-                statusBadgeLabel.setBackground(new Color(254, 243, 199));
-                plateNumberLabel.setText("[RSVP]");
-                modelLabel.setText("Advance Reservation");
-                tariffLabel.setText(String.format("\u20B9%.2f / hr", stall.tariff));
-                inTimeLabel.setText("Held for Arrival");
-                dwellTimeLabel.setText("0m 0s");
-                feeLabel.setText("\u20B90.00");
-                cameraPanel.setCameraState(false, "", null);
-                vehicleAvatarLabel.setIcon(null);
-            } else {
-                statusBadgeLabel.setText("VACANT");
-                statusBadgeLabel.setForeground(new Color(16, 185, 129));
-                statusBadgeLabel.setBackground(new Color(209, 250, 229));
-                plateNumberLabel.setText("[AVAILABLE]");
-                modelLabel.setText(stall.isVip ? "Accessible / VIP Bay" : (stall.isEv ? "EV Fast-Charging Hub" : "Standard Parking Bay"));
-                tariffLabel.setText(String.format("\u20B9%.2f / hr", stall.tariff));
-                inTimeLabel.setText("N/A");
-                dwellTimeLabel.setText("0m 0s");
-                feeLabel.setText("\u20B90.00");
-                cameraPanel.setCameraState(false, "", null);
-                vehicleAvatarLabel.setIcon(null);
+                    @Override
+                    public String getAccessibleName() {
+                        return accessibleName;
+                    }
+                };
             }
+            return accessibleContext;
         }
     }
+    private static class StatChip extends AccessibleComponent {
+        private final String label;
+        private final Color color;
+        private int value;
+        private int total;
 
-    // =========================================================================
-    // INNER CLASS: Simulated Optical CCTV Camera Stream
-    // =========================================================================
-    private static class CCTVStreamPanel extends JPanel {
-        private boolean isOccupied = true;
-        private VehicleType vehicleType = VehicleType.CAR;
-
-        public CCTVStreamPanel() {
-            setPreferredSize(new Dimension(Integer.MAX_VALUE, 120));
-            setMaximumSize(new Dimension(Integer.MAX_VALUE, 120));
-            setOpaque(false);
+        StatChip(String label, Color color) {
+            this.label = label;
+            this.color = color;
+            setPreferredSize(new Dimension(150, 46));
         }
 
-        public void setCameraState(boolean occupied, String plate, VehicleType vt) {
-            this.isOccupied = occupied;
-            this.vehicleType = (vt != null) ? vt : VehicleType.CAR;
+        void set(int value, int total) {
+            this.value = value;
+            this.total = total;
+            accessibleName = label + ": " + value;
             repaint();
         }
 
         @Override
         protected void paintComponent(Graphics g) {
-            super.paintComponent(g);
             Graphics2D g2 = (Graphics2D) g.create();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-
-            int w = getWidth();
-            int h = getHeight();
-
-            // Dark Asphalt Viewport
-            g2.setColor(new Color(15, 23, 42)); // slate-900
-            g2.fillRoundRect(0, 0, w, h, 8, 8);
-            g2.setColor(new Color(51, 65, 85)); // slate-700
-            g2.drawRoundRect(0, 0, w - 1, h - 1, 8, 8);
-
-            // Top Header: CAM-GATE-NORTH-01 + 1080p @ 60FPS
-            g2.setColor(new Color(30, 41, 59, 200));
-            g2.fillRoundRect(8, 8, 116, 16, 4, 4);
-            g2.setColor(new Color(203, 213, 225));
-            g2.setFont(new Font("Consolas", Font.BOLD, 9));
-            g2.drawString("CAM-GATE-NORTH-01", 12, 20);
-
-            g2.setColor(new Color(52, 211, 153)); // emerald-400
-            g2.drawString("1080p @ 60FPS", w - 84, 20);
-
-            // Camera Perspective Converging Lines
-            g2.setColor(new Color(71, 85, 105, 120));
-            g2.setStroke(new BasicStroke(1.5f));
-            g2.drawLine(w / 4, 26, w / 6, h - 22);
-            g2.drawLine(3 * w / 4, 26, 5 * w / 6, h - 22);
-
-            // Center Vehicle Target Reticle
-            int cx = w / 2;
-            int cy = h / 2;
-            if (isOccupied) {
-                // Dashed target circle
-                g2.setColor(new Color(30, 58, 138, 160));
-                g2.fillOval(cx - 24, cy - 24, 48, 48);
-
-                Stroke dashed = new BasicStroke(1.5f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10.0f, new float[]{4.0f, 3.0f}, 0.0f);
-                g2.setStroke(dashed);
-                g2.setColor(new Color(251, 191, 36)); // amber-400
-                g2.drawOval(cx - 24, cy - 24, 48, 48);
-
-                ImageIcon vIcon = ImageLoader.getVehicleIcon(vehicleType, 30, 30);
-                if (vIcon != null && vIcon.getImage() != null) {
-                    g2.drawImage(vIcon.getImage(), cx - 15, cy - 15, 30, 30, null);
-                }
-            } else {
-                g2.setColor(new Color(16, 185, 129, 140));
-                g2.fillOval(cx - 14, cy - 14, 28, 28);
-                g2.setColor(Color.WHITE);
-                g2.setFont(new Font("Segoe UI", Font.BOLD, 9));
-                g2.drawString("VACANT", cx - 18, cy + 3);
+            g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            g2.setColor(color);
+            g2.fillRoundRect(0, 5, 8, 8, 3, 3);
+            g2.setFont(UITheme.font(Font.PLAIN, 12));
+            g2.setColor(UITheme.TEXT_SECONDARY);
+            g2.drawString(label, 16, 14);
+            g2.setFont(UITheme.font(Font.BOLD, 22));
+            g2.setColor(UITheme.TEXT_PRIMARY);
+            String v = String.valueOf(value);
+            g2.drawString(v, 0, 42);
+            int vw = g2.getFontMetrics().stringWidth(v);
+            if (total > 0) {
+                g2.setFont(UITheme.font(Font.PLAIN, 12));
+                g2.setColor(UITheme.TEXT_TERTIARY);
+                g2.drawString(String.format("%.0f%%", value * 100.0 / total), vw + 8, 41);
             }
-
-            // Bottom Footer: LIVE CAD-ANPR STREAM + REC [ON]
-            // Bottom Footer: LIVE CAD-ANPR STREAM (Simulated) + REC [ON]
-            g2.setColor(new Color(100, 116, 139));
-            g2.setFont(new Font("Consolas", Font.BOLD, 8));
-            g2.drawString("LIVE CAD-ANPR STREAM (Simulated)", 8, h - 8);
-
-            g2.setColor(new Color(239, 68, 68)); // red-500
-            g2.drawString("\u25CF REC [ON]", w - 60, h - 8);
-
             g2.dispose();
         }
     }
 
-    // =========================================================================
-    // HELPER DATA MODEL: CAD Stall Representation
-    // =========================================================================
-    private static class CADStall {
-        String id;
-        final Rectangle bounds;
-        boolean isOccupied = false;
-        boolean isReserved = false;
-        boolean isMaintenance = false;
-        boolean isVip = false;
-        boolean isEv = false;
-        String category = "STANDARD";
-        VehicleType vehicleType = VehicleType.CAR;
-        String plate = "";
-        String vehicleModel = "Standard Automobile (Sedan)";
-        double tariff = 60.00;
-        String inTimeStr = "14:18:22 (Today)";
-        String dwellTimeStr = "42m 18s";
-        double accruedFee = 60.00;
+    /** Stacked bar of bay states for the active level. */
+    private static class OccupancyBar extends JComponent {
+        private Map<BayState, Integer> counts = new HashMap<>();
+        private int total;
 
-        public CADStall(String id, Rectangle bounds) {
-            this.id = id;
-            this.bounds = bounds;
+        OccupancyBar() {
+            setPreferredSize(new Dimension(100, 6));
         }
 
-        public void bindRealSlot(ParkingSlot slot) {
-            bindRealSlot(slot, null, null);
+        void set(Map<BayState, Integer> counts, int total) {
+            this.counts = counts;
+            this.total = total;
+            repaint();
         }
 
-        public void bindRealSlot(ParkingSlot slot, com.smartparking.repository.TicketDao tDao, com.smartparking.service.TariffService tService) {
-            this.id = slot.getSlotId();
-            this.isOccupied = "OCCUPIED".equalsIgnoreCase(slot.getStatus());
-            this.isReserved = "RESERVED".equalsIgnoreCase(slot.getStatus());
-            this.isMaintenance = "MAINTENANCE".equalsIgnoreCase(slot.getStatus()) || "OUT_OF_SERVICE".equalsIgnoreCase(slot.getStatus());
-            this.tariff = slot.getHourlyRate() > 0 ? slot.getHourlyRate() : 40.00;
-
-            if (slot.getSlotType() == SlotType.HANDICAPPED || slot.getSlotType() == SlotType.ACCESSIBLE) {
-                this.isVip = true;
-                this.category = "ACCESSIBLE";
-            } else if (slot.getSlotType() == SlotType.ELECTRIC) {
-                this.isEv = true;
-                this.category = "EV";
-            } else {
-                this.category = "STANDARD";
-            }
-
-            if (isOccupied) {
-                if (slot.getCurrentVehiclePlate() != null && !slot.getCurrentVehiclePlate().isBlank()) {
-                    this.plate = slot.getCurrentVehiclePlate();
-                } else if (slot.getCurrentVehicle() != null) {
-                    this.plate = slot.getCurrentVehicle().getLicensePlate();
-                } else {
-                    int num = 1001;
-                    try {
-                        num = 1000 + Integer.parseInt(slot.getSlotId().replaceAll("[^0-9]", ""));
-                    } catch (Exception ignored) {}
-                    this.plate = "UP32AB" + num;
-                }
-
-                if (slot.getCurrentVehicle() != null) {
-                    this.vehicleType = slot.getCurrentVehicle().getType();
-                    this.vehicleModel = slot.getCurrentVehicle().getType().name() + " (" + slot.getCurrentVehicle().getBrand() + ")";
-                } else {
-                    int num = 1;
-                    try {
-                        num = Integer.parseInt(slot.getSlotId().replaceAll("[^0-9]", ""));
-                    } catch (Exception ignored) {}
-                    this.vehicleType = (num % 4 == 0) ? VehicleType.EV_CAR : ((num % 3 == 0) ? VehicleType.MOTORCYCLE : VehicleType.CAR);
-                    this.vehicleModel = this.vehicleType.name() + " (Sedan)";
-                }
-
-                // Query active ticket from DB for real dwell time and accrued fee
-                com.smartparking.model.ticket.ParkingTicket activeTkt = null;
-                if (tDao != null && this.plate != null && !this.plate.isEmpty()) {
-                    activeTkt = tDao.findActiveByLicensePlate(this.plate).orElse(null);
-                }
-
-                if (activeTkt != null && activeTkt.getEntryTime() != null) {
-                    java.time.LocalDateTime entry = activeTkt.getEntryTime();
-                    this.inTimeStr = entry.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss (dd MMM)"));
-                    long mins = java.time.Duration.between(entry, java.time.LocalDateTime.now()).toMinutes();
-                    if (mins < 0) mins = 0;
-                    this.dwellTimeStr = (mins / 60) + "h " + (mins % 60) + "m";
-                    if (tService != null) {
-                        try {
-                            this.accruedFee = tService.calculateFee(activeTkt, java.time.LocalDateTime.now(), false, null).getTotalAmount();
-                        } catch (Exception e) {
-                            this.accruedFee = this.tariff;
-                        }
-                    } else {
-                        this.accruedFee = this.tariff;
-                    }
-                } else {
-                    this.inTimeStr = "10:30:00 (Today)";
-                    this.dwellTimeStr = "45m 12s";
-                    this.accruedFee = this.tariff;
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            int w = getWidth(), h = getHeight();
+            Shape clip = new RoundRectangle2D.Float(0, 0, w, h, h, h);
+            g2.setColor(UITheme.BG_ELEVATED);
+            g2.fill(clip);
+            g2.clip(clip);
+            if (total > 0) {
+                double x = 0;
+                BayState[] order = {BayState.OCCUPIED, BayState.CHARGING, BayState.RESERVED, BayState.MAINTENANCE, BayState.AVAILABLE};
+                for (BayState s : order) {
+                    int n = counts.getOrDefault(s, 0);
+                    if (n == 0) continue;
+                    double seg = w * n / (double) total;
+                    g2.setColor(s == BayState.AVAILABLE ? UITheme.blend(s.color(), UITheme.BG_CARD, 0.35) : s.color());
+                    g2.fillRect((int) Math.round(x), 0, (int) Math.ceil(seg), h);
+                    x += seg;
                 }
             }
+            g2.dispose();
+        }
+    }
+
+    /** Rounded filter pill with a count; selected pill uses the accent tint. */
+    private class FilterPill extends AccessibleComponent {
+        private final String key;
+        private final String text;
+        private int count;
+        private boolean hover;
+
+        FilterPill(String key, String text) {
+            this.key = key;
+            this.text = text;
+            setFocusable(true);
+            setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            accessibleName = "Filter: " + text;
+            addMouseListener(new MouseAdapter() {
+                @Override
+                public void mousePressed(MouseEvent e) {
+                    activate();
+                }
+
+                @Override
+                public void mouseEntered(MouseEvent e) {
+                    hover = true;
+                    repaint();
+                }
+
+                @Override
+                public void mouseExited(MouseEvent e) {
+                    hover = false;
+                    repaint();
+                }
+            });
+            getInputMap(WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, 0), "act");
+            getInputMap(WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "act");
+            getActionMap().put("act", new AbstractAction() {
+                @Override
+                public void actionPerformed(java.awt.event.ActionEvent e) {
+                    activate();
+                }
+            });
+            addFocusListener(new java.awt.event.FocusAdapter() {
+                @Override
+                public void focusGained(java.awt.event.FocusEvent e) {
+                    repaint();
+                }
+
+                @Override
+                public void focusLost(java.awt.event.FocusEvent e) {
+                    repaint();
+                }
+            });
+        }
+
+        private void activate() {
+            activeFilter = key;
+            for (FilterPill p : filterPills.values()) p.repaint();
+            bayGrid.repaint();
+        }
+
+        void setCount(int c) {
+            count = c;
+            revalidate();
+            repaint();
+        }
+
+        private String full() {
+            return text + "  " + count;
+        }
+
+        @Override
+        public Dimension getPreferredSize() {
+            FontMetrics fm = getFontMetrics(UITheme.font(Font.BOLD, 12));
+            return new Dimension(fm.stringWidth(full()) + 26, 30);
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            boolean active = key.equals(activeFilter);
+            int w = getWidth(), h = getHeight();
+            g2.setColor(active ? UITheme.ACCENT_SOFT : hover ? UITheme.BG_HOVER : UITheme.BG_CARD);
+            g2.fillRoundRect(0, 0, w - 1, h - 1, h, h);
+            g2.setColor(active ? UITheme.ACCENT_BORDER : UITheme.BORDER);
+            g2.drawRoundRect(0, 0, w - 1, h - 1, h, h);
+            if (isFocusOwner() && DarkTheme.isFocusVisible()) {
+                g2.setColor(UITheme.ACCENT_TEXT);
+                g2.drawRoundRect(1, 1, w - 3, h - 3, h - 2, h - 2);
+            }
+            g2.setFont(UITheme.font(Font.BOLD, 12));
+            FontMetrics fm = g2.getFontMetrics();
+            int y = (h + fm.getAscent() - fm.getDescent()) / 2;
+            g2.setColor(active ? UITheme.TEXT_PRIMARY : UITheme.TEXT_BODY);
+            g2.drawString(text, 13, y);
+            g2.setFont(UITheme.font(Font.PLAIN, 12));
+            g2.setColor(active ? UITheme.ACCENT_TEXT : UITheme.TEXT_TERTIARY);
+            g2.drawString(String.valueOf(count), 13 + fm.stringWidth(text + "  "), y);
+            g2.dispose();
         }
     }
 }

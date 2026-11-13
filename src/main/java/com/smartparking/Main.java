@@ -34,7 +34,7 @@ public class Main {
         } else {
             // Launch Modern Swing GUI
             try {
-                UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+                com.smartparking.ui.theme.DarkTheme.install();
             } catch (Exception ignored) {
             }
             SwingUtilities.invokeLater(() -> {

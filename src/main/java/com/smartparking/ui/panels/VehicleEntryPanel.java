@@ -8,10 +8,16 @@ import com.smartparking.patterns.strategy.allocation.BestFitAllocationStrategy;
 import com.smartparking.patterns.strategy.allocation.NearestFirstAllocationStrategy;
 import com.smartparking.patterns.strategy.allocation.RandomAllocationStrategy;
 import com.smartparking.service.ParkingService;
+import com.smartparking.ui.components.Badge;
+import com.smartparking.ui.components.EmptyState;
 import com.smartparking.ui.components.ModernButton;
+import com.smartparking.ui.components.PageHeader;
 import com.smartparking.ui.components.RoundedPanel;
+import com.smartparking.ui.components.Toast;
+import com.smartparking.ui.theme.DarkTheme;
 import com.smartparking.ui.theme.UITheme;
-import com.smartparking.ui.util.ImageLoader;
+import com.smartparking.ui.util.VectorIconUtil;
+import com.smartparking.ui.util.VectorIconUtil.IconType;
 import com.smartparking.util.BarcodeGenerator;
 import com.smartparking.util.DateFormat;
 import com.smartparking.util.MoneyFormat;
@@ -21,6 +27,7 @@ import javax.swing.*;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import java.awt.*;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
@@ -29,9 +36,20 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Gate 1 Vehicle Entry Panel.
- * Features high-resolution circular vehicle badge selection tiles (Bike, Car, Electric, Truck),
- * real-time ANPR plate generator, accessibility & EV charging toggles, and live ticket dispensary.
+ * Gate 1 — vehicle entry.
+ *
+ * <pre>
+ *  Vehicle entry
+ *  ┌ Vehicle details ────────────────┐ ┌ Ticket ─────────────────┐
+ *  │ Vehicle type  [tiles x7]        │ │ (empty state | ticket)   │
+ *  │ Licence plate [field] [Random]  │ │  TKT-..  Bay A14 · L1    │
+ *  │ Options  [permit] [EV charge]   │ │  plate, time, barcode    │
+ *  │ Allocation [combo]              │ │                          │
+ *  │ [ Park vehicle & issue ticket ] │ │                          │
+ *  └─────────────────────────────────┘ └──────────────────────────┘
+ * </pre>
+ * Business flow is unchanged: the selected allocation strategy is applied to {@link ParkingService}
+ * and {@link ParkingService#processVehicleEntry} issues the ticket.
  */
 public class VehicleEntryPanel extends JPanel {
 
@@ -40,229 +58,372 @@ public class VehicleEntryPanel extends JPanel {
 
     private VehicleType selectedVehicleType = VehicleType.CAR;
     private JTextField plateField;
+    private JLabel plateError;
     private JLabel fastagBadgeLabel;
     private JCheckBox permitCheck;
     private JCheckBox evChargingCheck;
+    private JLabel evHint;
     private JComboBox<String> strategyBox;
-    private JTextArea ticketPreviewArea;
-    private JLabel ticketVehicleBadge;
-    private JLabel ticketVehicleDesc;
+    private ModernButton btnPark;
+
+    // Ticket side
+    private CardLayout ticketCards;
+    private JPanel ticketHolder;
+    private JLabel tNumber, tSlot, tFloor, tPlate, tDistrict, tType, tTime, tMode;
+    private JPanel tFlags;
     private JLabel ticketBarcodeLabel;
     private JLabel ticketQrLabel;
 
-    // Type selection cards for 7 classes
+    // Type selection tiles for 7 classes
     private final List<VehicleTypeCard> typeCards = new ArrayList<>();
 
     public VehicleEntryPanel(ParkingService parkingService, Runnable onStateChange) {
         this.parkingService = parkingService;
         this.onStateChange = onStateChange;
 
-        setLayout(new BorderLayout(0, 16));
+        setLayout(new BorderLayout(0, 0));
         setBackground(UITheme.BG_CANVAS);
-        setBorder(BorderFactory.createEmptyBorder(18, 22, 18, 22));
+        setBorder(BorderFactory.createEmptyBorder(24, 28, 24, 28));
 
         initUI();
     }
 
     private void initUI() {
-        // --- TOP: Header Title ---
-        JPanel header = new JPanel(new BorderLayout());
-        header.setOpaque(false);
-        JLabel title = new JLabel("GATE 1: VEHICLE ARRIVAL & TICKET DISPENSARY", ImageLoader.getNavIcon("entry", 24), SwingConstants.LEFT);
-        title.setFont(UITheme.FONT_TITLE);
-        title.setForeground(UITheme.TEXT_DARK);
-        header.add(title, BorderLayout.WEST);
-        add(header, BorderLayout.NORTH);
+        add(new PageHeader("Vehicle entry", "Gate 1 · register an arriving vehicle, allocate a bay and issue its ticket"), BorderLayout.NORTH);
 
-        // --- CENTER: Split Layout (Entry Form on Left, Ticket Display on Right) ---
-        JPanel centerSplit = new JPanel(new GridLayout(1, 2, 20, 0));
-        centerSplit.setOpaque(false);
-
-        // LEFT: Entry Configuration Card
-        RoundedPanel formCard = new RoundedPanel(16, UITheme.BG_CARD, UITheme.BORDER_LIGHT);
-        formCard.setLayout(new BoxLayout(formCard, BoxLayout.Y_AXIS));
-        formCard.setBorder(BorderFactory.createEmptyBorder(20, 22, 20, 22));
-
-        JLabel step1 = new JLabel("1. Select Vehicle Classification:");
-        step1.setFont(UITheme.FONT_SUBTITLE);
-        step1.setForeground(UITheme.TEXT_DARK);
-        formCard.add(step1);
-        formCard.add(Box.createVerticalStrut(10));
-
-        // High-Resolution Vehicle Selection Grid (2 rows x 4 columns)
-        JPanel typeGrid = new JPanel(new GridLayout(2, 4, 8, 8));
-        typeGrid.setOpaque(false);
-        typeGrid.setMaximumSize(new Dimension(Integer.MAX_VALUE, 160));
-        typeGrid.setPreferredSize(new Dimension(500, 160));
-
-        typeCards.clear();
-        typeCards.add(new VehicleTypeCard("Motorcycle", "Two-Wheeler", VehicleType.MOTORCYCLE, new Color(139, 92, 246)));
-        typeCards.add(new VehicleTypeCard("Auto Rickshaw", "Three-Wheeler", VehicleType.AUTO_RICKSHAW, new Color(217, 119, 6)));
-        typeCards.add(new VehicleTypeCard("Standard Car", "Four-Wheeler", VehicleType.CAR, new Color(16, 185, 129)));
-        typeCards.add(new VehicleTypeCard("EV Car", "Electric 4W", VehicleType.EV_CAR, UITheme.PRIMARY_BLUE));
-        typeCards.add(new VehicleTypeCard("EV Bike", "Electric 2W", VehicleType.EV_TWO_WHEELER, new Color(6, 182, 212)));
-        typeCards.add(new VehicleTypeCard("LCV Mini-Truck", "Light Comm.", VehicleType.LCV, new Color(234, 88, 12)));
-        typeCards.add(new VehicleTypeCard("HCV Truck/Bus", "Heavy Comm.", VehicleType.HCV, new Color(180, 83, 9)));
-
-        for (VehicleTypeCard c : typeCards) {
-            typeGrid.add(c);
-        }
-        // Add empty placeholder for 8th cell to keep layout balanced
-        JPanel emptyCell = new JPanel();
-        emptyCell.setOpaque(false);
-        typeGrid.add(emptyCell);
-
-        formCard.add(typeGrid);
-        formCard.add(Box.createVerticalStrut(14));
-
-        // License Plate Input
-        JLabel step2 = new JLabel("2. License Plate Number (ANPR Read - Simulated):");
-        step2.setFont(UITheme.FONT_SUBTITLE);
-        step2.setForeground(UITheme.TEXT_DARK);
-        formCard.add(step2);
-        formCard.add(Box.createVerticalStrut(6));
-
-        JPanel plateRow = new JPanel(new BorderLayout(8, 0));
-        plateRow.setOpaque(false);
-        plateRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
-
-        plateField = new JTextField(PlateUtil.generateRandomUp());
-        UITheme.styleTextField(plateField);
-        plateField.getDocument().addDocumentListener(new DocumentListener() {
-            public void insertUpdate(DocumentEvent e) { updateFastagDetection(); }
-            public void removeUpdate(DocumentEvent e) { updateFastagDetection(); }
-            public void changedUpdate(DocumentEvent e) { updateFastagDetection(); }
-        });
-        plateRow.add(plateField, BorderLayout.CENTER);
-
-        JButton btnRegen = new JButton("New Plate", com.smartparking.ui.util.VectorIconUtil.getIcon(com.smartparking.ui.util.VectorIconUtil.IconType.DICE, 14, UITheme.TEXT_DARK));
-        btnRegen.setFont(UITheme.FONT_SMALL);
-        btnRegen.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        btnRegen.addActionListener(e -> {
-            plateField.setText(PlateUtil.generateRandomUp());
-            updateFastagDetection();
-        });
-        plateRow.add(btnRegen, BorderLayout.EAST);
-
-        formCard.add(plateRow);
-        formCard.add(Box.createVerticalStrut(4));
-
-        fastagBadgeLabel = new JLabel("Standard Paper / Barcode Ticket Required (No FASTag)");
-        fastagBadgeLabel.setFont(new Font("Segoe UI", Font.BOLD, 11));
-        fastagBadgeLabel.setForeground(new Color(100, 116, 139));
-        fastagBadgeLabel.setBorder(BorderFactory.createEmptyBorder(2, 6, 2, 6));
-        formCard.add(fastagBadgeLabel);
-        formCard.add(Box.createVerticalStrut(10));
-
-        // Options Checkboxes with crisp vector icons (No broken font glyphs)
-        JPanel permitRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        permitRow.setOpaque(false);
-        permitRow.add(new JLabel(com.smartparking.ui.util.VectorIconUtil.getIcon(com.smartparking.ui.util.VectorIconUtil.IconType.WHEELCHAIR, 16, UITheme.PRIMARY_BLUE)));
-        permitCheck = new JCheckBox("Persons with Disabilities (Divyang) Parking Permit");
-        permitCheck.setFont(UITheme.FONT_REGULAR);
-        permitCheck.setOpaque(false);
-        permitCheck.setForeground(UITheme.TEXT_DARK);
-        permitRow.add(permitCheck);
-        formCard.add(permitRow);
-        formCard.add(Box.createVerticalStrut(6));
-
-        JPanel evRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        evRow.setOpaque(false);
-        evRow.add(new JLabel(com.smartparking.ui.util.VectorIconUtil.getIcon(com.smartparking.ui.util.VectorIconUtil.IconType.PLUG, 16, new Color(16, 185, 129))));
-        evChargingCheck = new JCheckBox("Request Active EV Fast-Charging Station");
-        evChargingCheck.setFont(UITheme.FONT_REGULAR);
-        evChargingCheck.setOpaque(false);
-        evChargingCheck.setForeground(UITheme.TEXT_DARK);
-        evChargingCheck.setEnabled(false); // enabled only when EV is active
-        evRow.add(evChargingCheck);
-        formCard.add(evRow);
-        formCard.add(Box.createVerticalStrut(12));
-
-        // Allocation Mode Dropdown
-        JLabel step3 = new JLabel("3. Bay Allocation Mode:");
-        step3.setFont(UITheme.FONT_SUBTITLE);
-        step3.setForeground(UITheme.TEXT_DARK);
-        formCard.add(step3);
-        formCard.add(Box.createVerticalStrut(6));
-
-        String[] strategies = {
-                "Nearest Available Bay (Ground Floor First)",
-                "Best Fit (Optimal Vehicle Sizing)",
-                "Automated Distributed Assignment"
-        };
-        strategyBox = new JComboBox<>(strategies);
-        strategyBox.setMaximumSize(new Dimension(Integer.MAX_VALUE, 38));
-        UITheme.styleComboBox(strategyBox);
-        formCard.add(strategyBox);
-        formCard.add(Box.createVerticalStrut(20));
-
-        // Park Action Button
-        ModernButton btnPark = new ModernButton("PARK VEHICLE & ISSUE TICKET", ImageLoader.getNavIcon("entry", 22));
-        btnPark.setFont(new Font("Segoe UI", Font.BOLD, 15));
-        btnPark.setMaximumSize(new Dimension(Integer.MAX_VALUE, 46));
-        btnPark.addActionListener(e -> processEntry());
-        formCard.add(btnPark);
-
-        centerSplit.add(formCard);
-
-        // RIGHT: Real-Time Ticket Preview Card
-        RoundedPanel previewCard = new RoundedPanel(16, UITheme.BG_CARD, UITheme.BORDER_LIGHT);
-        previewCard.setLayout(new BorderLayout(0, 12));
-        previewCard.setBorder(BorderFactory.createEmptyBorder(20, 22, 20, 22));
-
-        // Header with live vehicle badge
-        JPanel previewHeader = new JPanel(new BorderLayout());
-        previewHeader.setOpaque(false);
-
-        JPanel leftTitle = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-        leftTitle.setOpaque(false);
-        JLabel pt = new JLabel("ISSUED PARKING TICKET", ImageLoader.loadIcon("images/logo_nav.png", 22, 22), SwingConstants.LEFT);
-        pt.setFont(UITheme.FONT_SUBTITLE);
-        pt.setForeground(UITheme.TEXT_DARK);
-        leftTitle.add(pt);
-        previewHeader.add(leftTitle, BorderLayout.WEST);
-
-        // Vehicle badge thumbnail
-        JPanel badgeThumb = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
-        badgeThumb.setOpaque(false);
-        ticketVehicleBadge = new JLabel(ImageLoader.getVehicleIcon(VehicleType.CAR, 48, 48));
-        ticketVehicleDesc = new JLabel("Standard Car");
-        ticketVehicleDesc.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        ticketVehicleDesc.setForeground(new Color(16, 185, 129));
-        badgeThumb.add(ticketVehicleBadge);
-        badgeThumb.add(ticketVehicleDesc);
-        previewHeader.add(badgeThumb, BorderLayout.EAST);
-
-        previewCard.add(previewHeader, BorderLayout.NORTH);
-
-        ticketPreviewArea = new JTextArea();
-        ticketPreviewArea.setFont(UITheme.FONT_MONO);
-        ticketPreviewArea.setEditable(false);
-        ticketPreviewArea.setBackground(new Color(248, 250, 252));
-        ticketPreviewArea.setBorder(BorderFactory.createEmptyBorder(12, 14, 12, 14));
-        ticketPreviewArea.setText("\n  [GATE STATUS: READY]\n\n  Select vehicle type, verify license plate, and click\n  'PARK VEHICLE & ISSUE TICKET' to dispense ticket.");
-
-        previewCard.add(new JScrollPane(ticketPreviewArea), BorderLayout.CENTER);
-
-        // ZXing Code128 Barcode & QR Code container
-        JPanel barcodeContainer = new JPanel(new BorderLayout(10, 0));
-        barcodeContainer.setOpaque(false);
-        barcodeContainer.setBorder(BorderFactory.createEmptyBorder(8, 6, 4, 6));
-
-        ticketBarcodeLabel = new JLabel();
-        ticketBarcodeLabel.setHorizontalAlignment(SwingConstants.CENTER);
-        ticketQrLabel = new JLabel();
-        ticketQrLabel.setHorizontalAlignment(SwingConstants.CENTER);
-
-        barcodeContainer.add(ticketBarcodeLabel, BorderLayout.CENTER);
-        barcodeContainer.add(ticketQrLabel, BorderLayout.EAST);
-        previewCard.add(barcodeContainer, BorderLayout.SOUTH);
-
-        centerSplit.add(previewCard);
-
-        add(centerSplit, BorderLayout.CENTER);
+        JPanel split = new JPanel(new GridBagLayout());
+        split.setOpaque(false);
+        GridBagConstraints gc = new GridBagConstraints();
+        gc.fill = GridBagConstraints.BOTH;
+        gc.weighty = 1;
+        gc.gridx = 0;
+        gc.weightx = 0.56;
+        gc.insets = new Insets(0, 0, 0, 16);
+        split.add(buildFormCard(), gc);
+        gc.gridx = 1;
+        gc.weightx = 0.44;
+        gc.insets = new Insets(0, 0, 0, 0);
+        split.add(buildTicketCard(), gc);
+        add(split, BorderLayout.CENTER);
 
         updateSelectionUI();
+        updateFastagDetection();
+    }
+
+    // ------------------------------------------------------------------ form
+    private JComponent buildFormCard() {
+        RoundedPanel card = new RoundedPanel(UITheme.RADIUS_LG, UITheme.BG_CARD, UITheme.BORDER_SUBTLE);
+        card.setLayout(new BorderLayout());
+        card.setBorder(BorderFactory.createEmptyBorder(22, 24, 22, 24));
+
+        JPanel form = new JPanel(new GridBagLayout());
+        form.setOpaque(false);
+        GridBagConstraints c = new GridBagConstraints();
+        c.gridx = 0;
+        c.gridy = 0;
+        c.weightx = 1;
+        c.fill = GridBagConstraints.HORIZONTAL;
+        c.anchor = GridBagConstraints.NORTHWEST;
+
+        // 1. Vehicle type
+        c.insets = new Insets(0, 0, 10, 0);
+        form.add(sectionLabel("Vehicle type", "Pick the class shown at the gate"), c);
+        c.gridy++;
+        c.insets = new Insets(0, 0, 22, 0);
+        JPanel typeGrid = new JPanel(new GridLayout(2, 4, 8, 8));
+        typeGrid.setOpaque(false);
+        typeCards.clear();
+        typeCards.add(new VehicleTypeCard("Motorcycle", "2-wheeler", VehicleType.MOTORCYCLE));
+        typeCards.add(new VehicleTypeCard("Auto rickshaw", "3-wheeler", VehicleType.AUTO_RICKSHAW));
+        typeCards.add(new VehicleTypeCard("Car", "4-wheeler", VehicleType.CAR));
+        typeCards.add(new VehicleTypeCard("Electric car", "EV 4-wheeler", VehicleType.EV_CAR));
+        typeCards.add(new VehicleTypeCard("Electric bike", "EV 2-wheeler", VehicleType.EV_TWO_WHEELER));
+        typeCards.add(new VehicleTypeCard("Light commercial", "LCV", VehicleType.LCV));
+        typeCards.add(new VehicleTypeCard("Heavy commercial", "Truck / bus", VehicleType.HCV));
+        for (VehicleTypeCard t : typeCards) typeGrid.add(t);
+        form.add(typeGrid, c);
+
+        // 2. Plate
+        c.gridy++;
+        c.insets = new Insets(0, 0, 10, 0);
+        form.add(sectionLabel("Licence plate", "Read by the ANPR camera (simulated); edit if needed"), c);
+        c.gridy++;
+        c.insets = new Insets(0, 0, 6, 0);
+        JPanel plateRow = new JPanel(new BorderLayout(8, 0));
+        plateRow.setOpaque(false);
+        plateField = new JTextField(PlateUtil.generateRandomUp());
+        UITheme.styleTextField(plateField);
+        plateField.setFont(UITheme.mono(Font.BOLD, 15));
+        plateField.setPreferredSize(new Dimension(200, 40));
+        plateField.getAccessibleContext().setAccessibleName("Licence plate");
+        plateField.getDocument().addDocumentListener(new DocumentListener() {
+            public void insertUpdate(DocumentEvent e) { onPlateEdited(); }
+            public void removeUpdate(DocumentEvent e) { onPlateEdited(); }
+            public void changedUpdate(DocumentEvent e) { onPlateEdited(); }
+        });
+        plateField.addActionListener(e -> processEntry());
+        plateRow.add(plateField, BorderLayout.CENTER);
+        ModernButton btnRegen = ModernButton.createSecondary("Random plate",
+                VectorIconUtil.getIcon(IconType.DICE, 14, UITheme.TEXT_SECONDARY));
+        btnRegen.setToolTipText("Simulate a new ANPR read");
+        btnRegen.addActionListener(e -> {
+            plateField.setText(PlateUtil.generateRandomUp());
+            plateField.requestFocusInWindow();
+        });
+        plateRow.add(btnRegen, BorderLayout.EAST);
+        form.add(plateRow, c);
+
+        c.gridy++;
+        c.insets = new Insets(0, 0, 4, 0);
+        plateError = new JLabel(" ");
+        plateError.setFont(UITheme.font(Font.PLAIN, 12));
+        plateError.setForeground(UITheme.ERROR_TEXT);
+        form.add(plateError, c);
+        c.gridy++;
+        c.insets = new Insets(0, 0, 22, 0);
+        fastagBadgeLabel = new JLabel(" ");
+        fastagBadgeLabel.setFont(UITheme.font(Font.PLAIN, 12));
+        JPanel fastagWrap = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        fastagWrap.setOpaque(false);
+        fastagWrap.add(fastagBadgeLabel);
+        form.add(fastagWrap, c);
+
+        // 3. Options
+        c.gridy++;
+        c.insets = new Insets(0, 0, 10, 0);
+        form.add(sectionLabel("Options", null), c);
+        c.gridy++;
+        c.insets = new Insets(0, 0, 4, 0);
+        permitCheck = new JCheckBox("Disability (Divyang) parking permit verified");
+        styleCheck(permitCheck);
+        form.add(optionRow(IconType.WHEELCHAIR, UITheme.SLOT_ACCESSIBLE, permitCheck, null), c);
+        c.gridy++;
+        c.insets = new Insets(0, 0, 22, 0);
+        evChargingCheck = new JCheckBox("Start an EV charging session");
+        styleCheck(evChargingCheck);
+        evChargingCheck.setEnabled(false);
+        evHint = new JLabel("Electric vehicles only");
+        form.add(optionRow(IconType.PLUG, UITheme.SLOT_EV, evChargingCheck, evHint), c);
+
+        // 4. Allocation
+        c.gridy++;
+        c.insets = new Insets(0, 0, 10, 0);
+        form.add(sectionLabel("Bay allocation", "How the system chooses a free bay"), c);
+        c.gridy++;
+        c.insets = new Insets(0, 0, 0, 0);
+        String[] strategies = {
+                "Nearest available bay (ground floor first)",
+                "Best fit for vehicle size",
+                "Distributed (spread across levels)"
+        };
+        strategyBox = new JComboBox<>(strategies);
+        UITheme.styleComboBox(strategyBox);
+        strategyBox.setPreferredSize(new Dimension(200, 40));
+        strategyBox.getAccessibleContext().setAccessibleName("Bay allocation mode");
+        form.add(strategyBox, c);
+
+        // filler so the button stays at the bottom
+        c.gridy++;
+        c.weighty = 1;
+        form.add(Box.createGlue(), c);
+
+        com.smartparking.ui.components.ScrollablePanel track = new com.smartparking.ui.components.ScrollablePanel(new BorderLayout());
+        track.setOpaque(false);
+        track.add(form, BorderLayout.CENTER);
+        JScrollPane scroll = new JScrollPane(track);
+        scroll.setBorder(null);
+        scroll.setOpaque(false);
+        scroll.getViewport().setOpaque(false);
+        scroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.getVerticalScrollBar().setUnitIncrement(16);
+        card.add(scroll, BorderLayout.CENTER);
+
+        JPanel foot = new JPanel(new BorderLayout());
+        foot.setOpaque(false);
+        foot.setBorder(BorderFactory.createEmptyBorder(18, 0, 0, 0));
+        btnPark = new ModernButton("Park vehicle & issue ticket", VectorIconUtil.getIcon(IconType.TICKET, 16, Color.WHITE));
+        btnPark.setFont(UITheme.font(Font.BOLD, 14));
+        btnPark.setPreferredSize(new Dimension(200, 44));
+        btnPark.setToolTipText("Allocate a bay and issue the ticket (Enter in the plate field)");
+        btnPark.addActionListener(e -> processEntry());
+        foot.add(btnPark, BorderLayout.CENTER);
+        card.add(foot, BorderLayout.SOUTH);
+        return card;
+    }
+
+    private static JComponent sectionLabel(String title, String hint) {
+        JPanel p = new JPanel();
+        p.setOpaque(false);
+        p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
+        JLabel t = new JLabel(title);
+        t.setFont(UITheme.font(Font.BOLD, 13));
+        t.setForeground(UITheme.TEXT_PRIMARY);
+        p.add(t);
+        if (hint != null) {
+            p.add(Box.createVerticalStrut(2));
+            JLabel h = new JLabel(hint);
+            h.setFont(UITheme.font(Font.PLAIN, 12));
+            h.setForeground(UITheme.TEXT_TERTIARY);
+            p.add(h);
+        }
+        return p;
+    }
+
+    private static void styleCheck(JCheckBox cb) {
+        cb.setFont(UITheme.font(Font.PLAIN, 13));
+        cb.setOpaque(false);
+        cb.setForeground(UITheme.TEXT_BODY);
+        cb.setFocusPainted(false);
+    }
+
+    private static JComponent optionRow(IconType icon, Color color, JCheckBox cb, JLabel hint) {
+        JPanel row = new JPanel(new BorderLayout(10, 0));
+        row.setOpaque(false);
+        row.setBorder(BorderFactory.createEmptyBorder(6, 0, 6, 0));
+        JLabel ic = new JLabel(VectorIconUtil.getIcon(icon, 16, color));
+        ic.setPreferredSize(new Dimension(20, 20));
+        row.add(ic, BorderLayout.WEST);
+        row.add(cb, BorderLayout.CENTER);
+        if (hint != null) {
+            hint.setFont(UITheme.font(Font.PLAIN, 12));
+            hint.setForeground(UITheme.TEXT_TERTIARY);
+            row.add(hint, BorderLayout.EAST);
+        }
+        return row;
+    }
+
+    // ------------------------------------------------------------------ ticket
+    private JComponent buildTicketCard() {
+        RoundedPanel card = new RoundedPanel(UITheme.RADIUS_LG, UITheme.BG_CARD, UITheme.BORDER_SUBTLE);
+        card.setLayout(new BorderLayout(0, 14));
+        card.setBorder(BorderFactory.createEmptyBorder(22, 24, 22, 24));
+
+        JPanel head = new JPanel(new BorderLayout());
+        head.setOpaque(false);
+        head.add(PageHeader.cardTitle("Issued ticket"), BorderLayout.WEST);
+        card.add(head, BorderLayout.NORTH);
+
+        ticketCards = new CardLayout();
+        ticketHolder = new JPanel(ticketCards);
+        ticketHolder.setOpaque(false);
+        EmptyState empty = new EmptyState(IconType.TICKET, "No ticket issued yet",
+                "Choose the vehicle type, confirm the plate and park it. The ticket appears here.");
+        ticketHolder.add(empty, "EMPTY");
+        ticketHolder.add(buildTicketView(), "TICKET");
+        ticketCards.show(ticketHolder, "EMPTY");
+        card.add(ticketHolder, BorderLayout.CENTER);
+        return card;
+    }
+
+    private JComponent buildTicketView() {
+        JPanel v = new JPanel(new GridBagLayout());
+        v.setOpaque(false);
+        GridBagConstraints c = new GridBagConstraints();
+        c.gridx = 0;
+        c.gridy = 0;
+        c.weightx = 1;
+        c.fill = GridBagConstraints.HORIZONTAL;
+        c.anchor = GridBagConstraints.NORTHWEST;
+
+        // Hero: allocated bay
+        JPanel hero = new RoundedPanel(UITheme.RADIUS_LG, UITheme.tint(UITheme.SUCCESS), UITheme.tintBorder(UITheme.SUCCESS));
+        hero.setLayout(new BorderLayout(14, 0));
+        hero.setBorder(BorderFactory.createEmptyBorder(16, 18, 16, 18));
+        JPanel heroText = new JPanel();
+        heroText.setOpaque(false);
+        heroText.setLayout(new BoxLayout(heroText, BoxLayout.Y_AXIS));
+        JLabel cap = new JLabel("PROCEED TO BAY");
+        cap.setFont(UITheme.FONT_CAPTION);
+        cap.setForeground(UITheme.SUCCESS_TEXT);
+        tSlot = new JLabel("—");
+        tSlot.setFont(UITheme.font(Font.BOLD, 34));
+        tSlot.setForeground(UITheme.TEXT_PRIMARY);
+        tFloor = new JLabel(" ");
+        tFloor.setFont(UITheme.font(Font.PLAIN, 13));
+        tFloor.setForeground(UITheme.TEXT_BODY);
+        heroText.add(cap);
+        heroText.add(Box.createVerticalStrut(4));
+        heroText.add(tSlot);
+        heroText.add(tFloor);
+        hero.add(heroText, BorderLayout.CENTER);
+        ticketQrLabel = new JLabel();
+        ticketQrLabel.setOpaque(true);
+        ticketQrLabel.setBackground(Color.WHITE);
+        ticketQrLabel.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        JPanel qrWrap = new JPanel(new GridBagLayout());
+        qrWrap.setOpaque(false);
+        qrWrap.add(ticketQrLabel);
+        hero.add(qrWrap, BorderLayout.EAST);
+        c.insets = new Insets(0, 0, 18, 0);
+        v.add(hero, c);
+
+        // Details
+        tNumber = detailValue();
+        tPlate = detailValue();
+        tPlate.setFont(UITheme.mono(Font.BOLD, 14));
+        tDistrict = new JLabel(" ");
+        tType = detailValue();
+        tTime = detailValue();
+        tMode = detailValue();
+        c.insets = new Insets(0, 0, 0, 0);
+        c.gridy++;
+        v.add(detail("Ticket number", tNumber), c);
+        c.gridy++;
+        v.add(detail("Licence plate", tPlate), c);
+        c.gridy++;
+        v.add(detail("Vehicle", tType), c);
+        c.gridy++;
+        v.add(detail("Entry time", tTime), c);
+        c.gridy++;
+        v.add(detail("Allocation", tMode), c);
+
+        c.gridy++;
+        c.insets = new Insets(10, 0, 16, 0);
+        tFlags = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        tFlags.setOpaque(false);
+        v.add(tFlags, c);
+
+        // Barcode strip on a white "paper" surface
+        c.gridy++;
+        c.insets = new Insets(0, 0, 0, 0);
+        ticketBarcodeLabel = new JLabel();
+        ticketBarcodeLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        ticketBarcodeLabel.setOpaque(true);
+        ticketBarcodeLabel.setBackground(Color.WHITE);
+        ticketBarcodeLabel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        v.add(ticketBarcodeLabel, c);
+
+        c.gridy++;
+        c.weighty = 1;
+        v.add(Box.createGlue(), c);
+        return v;
+    }
+
+    private static JLabel detailValue() {
+        JLabel l = new JLabel("—");
+        l.setFont(UITheme.font(Font.BOLD, 13));
+        l.setForeground(UITheme.TEXT_PRIMARY);
+        l.setHorizontalAlignment(SwingConstants.RIGHT);
+        return l;
+    }
+
+    private static JComponent detail(String key, JLabel value) {
+        JPanel r = new JPanel(new BorderLayout(12, 0));
+        r.setOpaque(false);
+        r.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, UITheme.BORDER_SUBTLE),
+                BorderFactory.createEmptyBorder(9, 0, 9, 0)));
+        JLabel k = new JLabel(key);
+        k.setFont(UITheme.font(Font.PLAIN, 13));
+        k.setForeground(UITheme.TEXT_SECONDARY);
+        r.add(k, BorderLayout.WEST);
+        r.add(value, BorderLayout.EAST);
+        return r;
+    }
+
+    // ------------------------------------------------------------------ behaviour
+    private void onPlateEdited() {
+        if (plateError != null) plateError.setText(" ");
         updateFastagDetection();
     }
 
@@ -270,40 +431,36 @@ public class VehicleEntryPanel extends JPanel {
         for (VehicleTypeCard card : typeCards) {
             card.setSelected(card.getType() == selectedVehicleType);
         }
-
-        ticketVehicleBadge.setIcon(ImageLoader.getVehicleIcon(selectedVehicleType, 48, 48));
-        ticketVehicleDesc.setText(switch (selectedVehicleType) {
-            case MOTORCYCLE, BIKE -> "Motorcycle (2-Wheeler)";
-            case AUTO_RICKSHAW -> "Auto Rickshaw (3-Wheeler)";
-            case CAR -> "Standard Car (4-Wheeler)";
-            case EV_CAR, ELECTRIC_CAR -> "Electric Car (EV 4-Wheeler)";
-            case EV_TWO_WHEELER -> "Electric Two-Wheeler (EV Bike)";
-            case LCV -> "Light Commercial Vehicle (LCV)";
-            case HCV, TRUCK -> "Heavy Commercial Vehicle (HCV)";
-        });
-        ticketVehicleDesc.setForeground(switch (selectedVehicleType) {
-            case MOTORCYCLE, BIKE -> new Color(139, 92, 246);
-            case AUTO_RICKSHAW -> new Color(217, 119, 6);
-            case CAR -> new Color(16, 185, 129);
-            case EV_CAR, ELECTRIC_CAR -> UITheme.PRIMARY_BLUE;
-            case EV_TWO_WHEELER -> new Color(6, 182, 212);
-            case LCV -> new Color(234, 88, 12);
-            case HCV, TRUCK -> new Color(180, 83, 9);
-        });
-
         boolean isEv = (selectedVehicleType == VehicleType.EV_CAR || selectedVehicleType == VehicleType.EV_TWO_WHEELER || selectedVehicleType == VehicleType.ELECTRIC_CAR);
         evChargingCheck.setEnabled(isEv);
+        evHint.setText(isEv ? " " : "Electric vehicles only");
         if (!isEv) {
             evChargingCheck.setSelected(false);
         }
     }
 
+    private static String vehicleLabel(VehicleType t) {
+        return switch (t) {
+            case MOTORCYCLE, BIKE -> "Motorcycle (2-wheeler)";
+            case AUTO_RICKSHAW -> "Auto rickshaw (3-wheeler)";
+            case CAR -> "Car (4-wheeler)";
+            case EV_CAR, ELECTRIC_CAR -> "Electric car";
+            case EV_TWO_WHEELER -> "Electric two-wheeler";
+            case LCV -> "Light commercial vehicle";
+            case HCV, TRUCK -> "Heavy commercial vehicle";
+        };
+    }
+
     private void processEntry() {
         String plate = plateField.getText().trim();
         if (plate.isEmpty() || !PlateUtil.isValid(plate)) {
-            JOptionPane.showMessageDialog(this, "Enter a valid UP plate, e.g. UP32 AB 1234", "Input Validation", JOptionPane.WARNING_MESSAGE);
+            plateError.setText(plate.isEmpty() ? "Enter the vehicle's licence plate." : "That doesn't look like a valid plate. Example: UP32 AB 1234");
+            plateError.setIcon(VectorIconUtil.getIcon(IconType.ALERT, 13, UITheme.ERROR_TEXT));
+            plateField.requestFocusInWindow();
+            plateField.selectAll();
             return;
         }
+        plateError.setIcon(null);
 
         // Apply selected Strategy Pattern
         int stratIndex = strategyBox.getSelectedIndex();
@@ -330,40 +487,16 @@ public class VehicleEntryPanel extends JPanel {
             vehicle.setDivyangPermit(true);
         }
 
+        btnPark.setEnabled(false);
+        btnPark.setText("Allocating bay…");
         try {
             ParkingTicket ticket = parkingService.processVehicleEntry(vehicle);
-
-            StringBuilder sb = new StringBuilder();
-            sb.append("====================================================\n");
-            sb.append("          GRAND TECH PARK SMART GARAGE              \n");
-            sb.append("               OFFICIAL PARKING PASS                \n");
-            sb.append("====================================================\n");
-            sb.append(String.format("TICKET NUMBER : %s\n", ticket.getTicketNumber()));
-            sb.append(String.format("LICENSE PLATE : %s  [%s]\n", PlateUtil.format(ticket.getLicensePlate()), PlateUtil.district(ticket.getLicensePlate())));
-            sb.append(String.format("VEHICLE TYPE  : %s\n", ticket.getVehicleType()));
-            sb.append(String.format("ASSIGNED SLOT : %s  (Floor %d)\n", ticket.getSlotId(), ticket.getFloorNumber()));
-            sb.append(String.format("ENTRY TIME    : %s\n", DateFormat.display(ticket.getEntryTime())));
             String stratName = switch (strategyBox.getSelectedIndex()) {
-                case 1 -> "Best Fit Allocation";
-                case 2 -> "Distributed Automated Allocation";
-                default -> "Nearest Available Bay (Ground Floor First)";
+                case 1 -> "Best fit";
+                case 2 -> "Distributed";
+                default -> "Nearest available";
             };
-            sb.append(String.format("ALLOCATION MODE: %s\n", stratName));
-            if (hasPermit) sb.append("ACCESSIBILITY : [DIVYANG PERMIT VERIFIED]\n");
-            if (requestCharge) sb.append("EV CHARGER    : [ACTIVE CHARGING SESSION STARTED]\n");
-            sb.append("----------------------------------------------------\n");
-            sb.append("BARCODE: ||| ||||| |||| |||| ||| ||||||| ||||\n");
-            sb.append("====================================================\n");
-            sb.append("      Please keep this ticket for checkout!         \n");
-            sb.append("====================================================\n");
-
-            ticketPreviewArea.setText(sb.toString());
-
-            // Render real ZXing Code128 barcode and QR code
-            BufferedImage barcodeImg = BarcodeGenerator.generateBarcode(ticket.getTicketNumber(), 240, 42);
-            if (barcodeImg != null) ticketBarcodeLabel.setIcon(new ImageIcon(barcodeImg));
-            BufferedImage qrImg = BarcodeGenerator.generateQrCode(ticket.getTicketNumber(), 75);
-            if (qrImg != null) ticketQrLabel.setIcon(new ImageIcon(qrImg));
+            showTicket(ticket, stratName, hasPermit, requestCharge);
 
             // Prepare next entry
             plateField.setText(PlateUtil.generateRandomUp());
@@ -372,16 +505,42 @@ public class VehicleEntryPanel extends JPanel {
             if (onStateChange != null) {
                 onStateChange.run();
             }
-
-            JOptionPane.showMessageDialog(this,
-                    "Vehicle parked successfully in Slot " + ticket.getSlotId() + " (Floor " + ticket.getFloorNumber() + ")!",
-                    "Entry Gate Success", JOptionPane.INFORMATION_MESSAGE);
-
+            Toast.success(this, "Vehicle parked in bay " + ticket.getSlotId(),
+                    PlateUtil.format(ticket.getLicensePlate()) + " · Level " + ticket.getFloorNumber() + " · " + ticket.getTicketNumber());
         } catch (IllegalStateException ex) {
-            JOptionPane.showMessageDialog(this, ex.getMessage(), "Slot Allocation Notice", JOptionPane.WARNING_MESSAGE);
+            Toast.warning(this, "No bay allocated", ex.getMessage());
         } catch (Exception ex) {
-            JOptionPane.showMessageDialog(this, ex.getMessage(), "Entry Gate Error", JOptionPane.ERROR_MESSAGE);
+            Toast.error(this, "Entry failed", ex.getMessage());
+        } finally {
+            btnPark.setEnabled(true);
+            btnPark.setText("Park vehicle & issue ticket");
         }
+    }
+
+    private void showTicket(ParkingTicket ticket, String mode, boolean permit, boolean charging) {
+        tSlot.setText("Bay " + ticket.getSlotId());
+        tFloor.setText("Level " + ticket.getFloorNumber());
+        tNumber.setText(ticket.getTicketNumber());
+        String district = PlateUtil.district(ticket.getLicensePlate());
+        tPlate.setText(PlateUtil.format(ticket.getLicensePlate()) + (district == null || district.isBlank() ? "" : "  ·  " + district));
+        tType.setText(ticket.getVehicleType() != null ? vehicleLabel(ticket.getVehicleType()) : "—");
+        tTime.setText(DateFormat.display(ticket.getEntryTime()));
+        tMode.setText(mode);
+        tFlags.removeAll();
+        if (permit) {
+            tFlags.add(new Badge("Divyang permit verified", UITheme.SLOT_ACCESSIBLE));
+            tFlags.add(Box.createHorizontalStrut(8));
+        }
+        if (charging) tFlags.add(new Badge("EV charging started", UITheme.SLOT_EV));
+        tFlags.setVisible(permit || charging);
+
+        BufferedImage barcodeImg = BarcodeGenerator.generateBarcode(ticket.getTicketNumber(), 300, 48);
+        ticketBarcodeLabel.setIcon(barcodeImg != null ? new ImageIcon(barcodeImg) : null);
+        BufferedImage qrImg = BarcodeGenerator.generateQrCode(ticket.getTicketNumber(), 84);
+        ticketQrLabel.setIcon(qrImg != null ? new ImageIcon(qrImg) : null);
+        ticketCards.show(ticketHolder, "TICKET");
+        ticketHolder.revalidate();
+        ticketHolder.repaint();
     }
 
     private void updateFastagDetection() {
@@ -390,78 +549,67 @@ public class VehicleEntryPanel extends JPanel {
         Optional<FastagAccount> accOpt = parkingService.getFastagService().detectTag(raw);
         if (accOpt.isPresent()) {
             FastagAccount acc = accOpt.get();
-            fastagBadgeLabel.setText(String.format("\uD83D\uDCF6 FASTag Detected (Simulated): %s (Balance: %s)",
+            fastagBadgeLabel.setText(String.format("FASTag detected (simulated) · %s · balance %s",
                     acc.getTagId(), MoneyFormat.format(acc.getBalance())));
-            fastagBadgeLabel.setForeground(new Color(22, 101, 52));
-            fastagBadgeLabel.setBackground(new Color(220, 252, 231));
+            fastagBadgeLabel.setIcon(VectorIconUtil.getIcon(IconType.CHECK, 13, UITheme.SUCCESS_TEXT));
+            fastagBadgeLabel.setForeground(UITheme.SUCCESS_TEXT);
             fastagBadgeLabel.setOpaque(true);
+            fastagBadgeLabel.setBackground(UITheme.tint(UITheme.SUCCESS));
             fastagBadgeLabel.setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createLineBorder(new Color(134, 239, 172), 1, true),
-                    BorderFactory.createEmptyBorder(4, 8, 4, 8)
-            ));
+                    new DarkTheme.RoundBorder(UITheme.tintBorder(UITheme.SUCCESS), UITheme.RADIUS),
+                    BorderFactory.createEmptyBorder(4, 8, 4, 10)));
         } else {
-            fastagBadgeLabel.setText("Standard Paper / Barcode Ticket Required (No FASTag)");
-            fastagBadgeLabel.setForeground(new Color(100, 116, 139));
+            fastagBadgeLabel.setText("No FASTag on this plate · a paper ticket will be issued");
+            fastagBadgeLabel.setIcon(VectorIconUtil.getIcon(IconType.TICKET, 13, UITheme.TEXT_TERTIARY));
+            fastagBadgeLabel.setForeground(UITheme.TEXT_TERTIARY);
             fastagBadgeLabel.setOpaque(false);
-            fastagBadgeLabel.setBorder(BorderFactory.createEmptyBorder(2, 4, 2, 4));
+            fastagBadgeLabel.setBorder(BorderFactory.createEmptyBorder(4, 0, 4, 0));
         }
+        fastagBadgeLabel.setIconTextGap(8);
     }
 
     /**
-     * Interactive card representing a vehicle classification with custom badge icon,
-     * label, subtitle, hover animation, and active state highlight.
+     * Selectable vehicle-class tile: monochrome vector icon, title and subtitle.
+     * Keyboard: Tab to focus, Space/Enter to select.
      */
     private class VehicleTypeCard extends JPanel {
-        private final String title;
-        private final String subtitle;
         private final VehicleType type;
-        private final Color accentColor;
+        private final JLabel iconLabel;
         private boolean isSelected = false;
         private boolean isHovered = false;
 
-        public VehicleTypeCard(String title, String subtitle, VehicleType type, Color accentColor) {
-            this.title = title;
-            this.subtitle = subtitle;
+        public VehicleTypeCard(String title, String subtitle, VehicleType type) {
             this.type = type;
-            this.accentColor = accentColor;
-
-            setLayout(new BorderLayout(0, 4));
+            setLayout(new BorderLayout(0, 6));
             setOpaque(false);
+            setFocusable(true);
             setCursor(new Cursor(Cursor.HAND_CURSOR));
-            setBorder(BorderFactory.createEmptyBorder(10, 8, 10, 8));
+            setBorder(BorderFactory.createEmptyBorder(12, 10, 10, 10));
+            setToolTipText(title + " (" + subtitle + ")");
+            getAccessibleContext().setAccessibleName("Vehicle type: " + title);
 
-            // Icon (52x52) with vector fallback
-            Icon vIcon = ImageLoader.getVehicleIcon(type, 52, 52);
-            if (vIcon == null) {
-                vIcon = com.smartparking.ui.util.VectorIconUtil.getVehicleIcon(type, 44, accentColor);
-            }
-            JLabel iconLabel = new JLabel(vIcon, SwingConstants.CENTER);
+            iconLabel = new JLabel(VectorIconUtil.getVehicleIcon(type, 26, UITheme.TEXT_SECONDARY), SwingConstants.CENTER);
             add(iconLabel, BorderLayout.CENTER);
 
-            // Labels
             JPanel textPanel = new JPanel();
             textPanel.setLayout(new BoxLayout(textPanel, BoxLayout.Y_AXIS));
             textPanel.setOpaque(false);
-
             JLabel tLbl = new JLabel(title);
-            tLbl.setFont(new Font("Segoe UI", Font.BOLD, 11));
-            tLbl.setForeground(new Color(30, 41, 59));
+            tLbl.setFont(UITheme.font(Font.BOLD, 12));
+            tLbl.setForeground(UITheme.TEXT_PRIMARY);
             tLbl.setAlignmentX(Component.CENTER_ALIGNMENT);
-
             JLabel sLbl = new JLabel(subtitle);
-            sLbl.setFont(new Font("Segoe UI", Font.PLAIN, 10));
-            sLbl.setForeground(new Color(100, 116, 139));
+            sLbl.setFont(UITheme.font(Font.PLAIN, 11));
+            sLbl.setForeground(UITheme.TEXT_TERTIARY);
             sLbl.setAlignmentX(Component.CENTER_ALIGNMENT);
-
             textPanel.add(tLbl);
             textPanel.add(sLbl);
             add(textPanel, BorderLayout.SOUTH);
 
             addMouseListener(new MouseAdapter() {
                 @Override
-                public void mouseClicked(MouseEvent e) {
-                    selectedVehicleType = type;
-                    updateSelectionUI();
+                public void mousePressed(MouseEvent e) {
+                    choose();
                 }
 
                 @Override
@@ -476,6 +624,30 @@ public class VehicleEntryPanel extends JPanel {
                     repaint();
                 }
             });
+            getInputMap(WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, 0), "choose");
+            getInputMap(WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "choose");
+            getActionMap().put("choose", new AbstractAction() {
+                @Override
+                public void actionPerformed(java.awt.event.ActionEvent e) {
+                    choose();
+                }
+            });
+            addFocusListener(new java.awt.event.FocusAdapter() {
+                @Override
+                public void focusGained(java.awt.event.FocusEvent e) {
+                    repaint();
+                }
+
+                @Override
+                public void focusLost(java.awt.event.FocusEvent e) {
+                    repaint();
+                }
+            });
+        }
+
+        private void choose() {
+            selectedVehicleType = type;
+            updateSelectionUI();
         }
 
         public VehicleType getType() {
@@ -484,6 +656,7 @@ public class VehicleEntryPanel extends JPanel {
 
         public void setSelected(boolean sel) {
             this.isSelected = sel;
+            iconLabel.setIcon(VectorIconUtil.getVehicleIcon(type, 26, sel ? UITheme.ACCENT_TEXT : UITheme.TEXT_SECONDARY));
             repaint();
         }
 
@@ -491,37 +664,18 @@ public class VehicleEntryPanel extends JPanel {
         protected void paintComponent(Graphics g) {
             Graphics2D g2 = (Graphics2D) g.create();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-
             int w = getWidth();
             int h = getHeight();
-            int arc = 12;
-
-            if (isSelected) {
-                // Soft accent pastel background
-                Color bgTint = new Color(accentColor.getRed(), accentColor.getGreen(), accentColor.getBlue(), 28);
-                g2.setColor(bgTint);
-                g2.fillRoundRect(1, 1, w - 2, h - 2, arc, arc);
-
-                // Bold colored border
-                g2.setColor(accentColor);
-                g2.setStroke(new BasicStroke(2.2f));
-                g2.drawRoundRect(1, 1, w - 3, h - 3, arc, arc);
-            } else if (isHovered) {
-                g2.setColor(new Color(248, 250, 252));
-                g2.fillRoundRect(1, 1, w - 2, h - 2, arc, arc);
-
-                g2.setColor(new Color(203, 213, 225));
-                g2.setStroke(new BasicStroke(1.2f));
-                g2.drawRoundRect(1, 1, w - 3, h - 3, arc, arc);
-            } else {
-                g2.setColor(Color.WHITE);
-                g2.fillRoundRect(1, 1, w - 2, h - 2, arc, arc);
-
-                g2.setColor(new Color(226, 232, 240));
-                g2.setStroke(new BasicStroke(1.0f));
-                g2.drawRoundRect(1, 1, w - 3, h - 3, arc, arc);
+            int arc = UITheme.RADIUS_LG;
+            g2.setColor(isSelected ? UITheme.ACCENT_SOFT : isHovered ? UITheme.BG_HOVER : UITheme.BG_ELEVATED);
+            g2.fillRoundRect(0, 0, w - 1, h - 1, arc, arc);
+            g2.setColor(isSelected ? UITheme.ACCENT : isHovered ? UITheme.BORDER_STRONG : UITheme.BORDER_SUBTLE);
+            g2.setStroke(new BasicStroke(isSelected ? 1.6f : 1f));
+            g2.drawRoundRect(0, 0, w - 1, h - 1, arc, arc);
+            if (isFocusOwner() && DarkTheme.isFocusVisible()) {
+                g2.setColor(UITheme.ACCENT_TEXT);
+                g2.drawRoundRect(2, 2, w - 5, h - 5, arc - 2, arc - 2);
             }
-
             g2.dispose();
             super.paintComponent(g);
         }

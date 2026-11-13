@@ -6,79 +6,47 @@ import javax.swing.*;
 import java.awt.*;
 
 /**
- * Modern dashboard KPI card matching the Tailwind aesthetic:
- * Centered category title, prominent colored metric number, subtitle,
- * and bottom-left rounded icon badge with accent tint.
+ * KPI card: caption + tinted icon badge on top, large value, contextual subtitle.
+ * Values are always supplied by the caller from live data.
  */
 public class MetricCard extends RoundedPanel {
-
     private final JLabel iconLabel;
     private final JLabel titleLabel;
     private final JLabel valueLabel;
     private final JLabel subtitleLabel;
 
     public MetricCard(String title, String initialValue, Icon icon, Color accentColor, String subtitle) {
-        super(12, UITheme.BG_CARD, UITheme.BORDER_LIGHT);
-        setLayout(new BorderLayout(0, 10));
-        setBorder(BorderFactory.createEmptyBorder(14, 14, 12, 14));
-        setPreferredSize(new Dimension(190, 128));
+        super(UITheme.RADIUS_LG, UITheme.BG_CARD, UITheme.BORDER_SUBTLE);
+        Color accent = accentColor != null ? accentColor : UITheme.ACCENT;
+        setLayout(new BorderLayout(0, 8));
+        setBorder(BorderFactory.createEmptyBorder(14, 16, 14, 16));
+        setPreferredSize(new Dimension(140, 120));
 
-        // --- TOP: Centered Metrics Info ---
-        JPanel topPanel = new JPanel();
-        topPanel.setLayout(new BoxLayout(topPanel, BoxLayout.Y_AXIS));
-        topPanel.setOpaque(false);
-
-        titleLabel = new JLabel(title.toUpperCase());
-        titleLabel.setFont(new Font("Segoe UI", Font.BOLD, 10));
-        titleLabel.setForeground(new Color(100, 116, 139)); // slate-500
-        titleLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
-
-        valueLabel = new JLabel(initialValue);
-        valueLabel.setFont(new Font("Segoe UI", Font.BOLD, 24));
-        valueLabel.setForeground(accentColor != null ? accentColor : UITheme.TEXT_DARK);
-        valueLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
-
-        subtitleLabel = new JLabel(subtitle != null ? subtitle : "");
-        subtitleLabel.setFont(new Font("Segoe UI", Font.PLAIN, 11));
-        subtitleLabel.setForeground(new Color(100, 116, 139)); // slate-500
-        subtitleLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
-
-        topPanel.add(titleLabel);
-        topPanel.add(Box.createVerticalStrut(2));
-        topPanel.add(valueLabel);
-        topPanel.add(Box.createVerticalStrut(2));
-        topPanel.add(subtitleLabel);
-
-        add(topPanel, BorderLayout.CENTER);
-
-        // --- BOTTOM: Left-aligned Icon Badge ---
-        JPanel bottomRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
-        bottomRow.setOpaque(false);
-
-        Color tintBg = new Color(accentColor.getRed(), accentColor.getGreen(), accentColor.getBlue(), 22);
-        Color tintBorder = new Color(accentColor.getRed(), accentColor.getGreen(), accentColor.getBlue(), 80);
-
-        JPanel iconBadge = new JPanel(new GridBagLayout()) {
-            @Override
-            protected void paintComponent(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(tintBg);
-                g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 8, 8);
-                g2.setColor(tintBorder);
-                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 8, 8);
-                g2.dispose();
-                super.paintComponent(g);
-            }
-        };
-        iconBadge.setOpaque(false);
-        iconBadge.setPreferredSize(new Dimension(32, 32));
+        JPanel top = new JPanel(new BorderLayout());
+        top.setOpaque(false);
+        titleLabel = new JLabel(title);
+        titleLabel.setFont(UITheme.font(Font.BOLD, 12));
+        titleLabel.setForeground(UITheme.TEXT_SECONDARY);
+        top.add(titleLabel, BorderLayout.WEST);
 
         iconLabel = new JLabel(icon);
-        iconBadge.add(iconLabel);
-        bottomRow.add(iconBadge);
+        JComponent badge = new IconBadge(iconLabel, accent, 28);
+        top.add(badge, BorderLayout.EAST);
+        add(top, BorderLayout.NORTH);
 
-        add(bottomRow, BorderLayout.SOUTH);
+        JPanel body = new JPanel();
+        body.setOpaque(false);
+        body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
+        valueLabel = new JLabel(initialValue);
+        valueLabel.setFont(UITheme.font(Font.BOLD, 24));
+        valueLabel.setForeground(UITheme.TEXT_PRIMARY);
+        subtitleLabel = new JLabel(subtitle != null ? subtitle : "");
+        subtitleLabel.setFont(UITheme.font(Font.PLAIN, 12));
+        subtitleLabel.setForeground(UITheme.TEXT_TERTIARY);
+        body.add(valueLabel);
+        body.add(Box.createVerticalStrut(2));
+        body.add(subtitleLabel);
+        add(body, BorderLayout.CENTER);
     }
 
     public void setValue(String value) {
@@ -87,5 +55,34 @@ public class MetricCard extends RoundedPanel {
 
     public void setSubtitle(String subtitle) {
         this.subtitleLabel.setText(subtitle);
+    }
+
+    public void setSubtitleColor(Color c) {
+        this.subtitleLabel.setForeground(c);
+    }
+
+    /** Rounded tinted square containing an icon. */
+    public static class IconBadge extends JPanel {
+        private final Color accent;
+
+        public IconBadge(JComponent content, Color accent, int size) {
+            super(new GridBagLayout());
+            this.accent = accent;
+            setOpaque(false);
+            setPreferredSize(new Dimension(size, size));
+            add(content);
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setColor(UITheme.tint(accent));
+            g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 8, 8);
+            g2.setColor(UITheme.blend(accent, UITheme.BG_CARD, 0.28));
+            g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 8, 8);
+            g2.dispose();
+            super.paintComponent(g);
+        }
     }
 }

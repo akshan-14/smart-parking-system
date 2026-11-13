@@ -68,200 +68,299 @@ public class LoginFrame extends JFrame {
         this.parkingService = ParkingService.createDefault(parkingLot);
     }
 
+    private JLabel errorLabel;
+    private ModernButton btnSignIn;
+
     private void initUI() {
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setSize(940, 600);
+        setSize(960, 620);
         setLocationRelativeTo(null);
         setResizable(false);
 
-        // App Icon
         Image appIcon = ImageLoader.loadImage("images/logo_small.png");
         if (appIcon != null) {
             setIconImage(appIcon);
         }
 
         JPanel mainContainer = new JPanel(new GridLayout(1, 2));
+        mainContainer.setBackground(UITheme.BG_APP);
+        mainContainer.add(buildBrandPanel());
+        mainContainer.add(buildFormPanel());
+        setContentPane(mainContainer);
+        getRootPane().setDefaultButton(btnSignIn);
+    }
 
-        // --- LEFT HERO PANEL with Parking Background Image ---
-        JPanel heroPanel = new JPanel() {
+    /** Left half: brand, value proposition and a quiet painted parking-grid motif. */
+    private JPanel buildBrandPanel() {
+        JPanel hero = new JPanel(new GridBagLayout()) {
             @Override
             protected void paintComponent(Graphics g) {
                 super.paintComponent(g);
                 Graphics2D g2 = (Graphics2D) g.create();
-                Image bg = ImageLoader.loadImage("images/parking_background.png");
-                if (bg != null) {
-                    g2.drawImage(bg, 0, 0, getWidth(), getHeight(), null);
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                int w = getWidth(), h = getHeight();
+                g2.setColor(UITheme.BG_APP);
+                g2.fillRect(0, 0, w, h);
+                // dot grid
+                g2.setColor(new Color(255, 255, 255, 10));
+                for (int x = 16; x < w; x += 24) for (int y = 16; y < h; y += 24) g2.fillRect(x, y, 2, 2);
+                // stylised parking bays at the bottom: thin outlines, a few accent-filled
+                int bayW = 46, bayH = 74, gap = 10, ox = 48;
+                int cols = Math.max(1, (w - ox * 2 + gap) / (bayW + gap));
+                int oy = h - bayH - 48;
+                for (int i = 0; i < cols; i++) {
+                    int x = ox + i * (bayW + gap);
+                    boolean filled = i == 1 || i == 2 || i == 5;
+                    boolean ev = i == 6;
+                    g2.setColor(filled ? UITheme.alpha(UITheme.ACCENT, 46) : ev ? UITheme.alpha(UITheme.SLOT_EV, 30) : new Color(255, 255, 255, 6));
+                    g2.fillRoundRect(x, oy, bayW, bayH, 8, 8);
+                    g2.setColor(filled ? UITheme.alpha(UITheme.ACCENT, 140) : ev ? UITheme.alpha(UITheme.SLOT_EV, 120) : new Color(255, 255, 255, 28));
+                    g2.drawRoundRect(x, oy, bayW, bayH, 8, 8);
                 }
-                // Gradient overlay
-                GradientPaint gp = new GradientPaint(0, 0, new Color(15, 23, 42, 230), 0, getHeight(), new Color(30, 58, 138, 240));
-                g2.setPaint(gp);
-                g2.fillRect(0, 0, getWidth(), getHeight());
+                // right edge separator
+                g2.setColor(UITheme.BORDER_SUBTLE);
+                g2.drawLine(w - 1, 0, w - 1, h);
                 g2.dispose();
             }
         };
-        heroPanel.setLayout(new BoxLayout(heroPanel, BoxLayout.Y_AXIS));
-        heroPanel.setBorder(BorderFactory.createEmptyBorder(50, 40, 50, 40));
+        hero.setBorder(BorderFactory.createEmptyBorder(48, 48, 150, 48));
 
-        JLabel logoLabel = new JLabel(ImageLoader.loadIcon("images/logo.png", 96, 96));
-        logoLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
-        heroPanel.add(logoLabel);
-        heroPanel.add(Box.createVerticalStrut(20));
+        JPanel col = new JPanel();
+        col.setOpaque(false);
+        col.setLayout(new BoxLayout(col, BoxLayout.Y_AXIS));
 
-        JLabel heroTitle = new JLabel("Smart Parking");
-        heroTitle.setFont(new Font("Segoe UI", Font.BOLD, 28));
-        heroTitle.setForeground(Color.WHITE);
-        heroTitle.setAlignmentX(Component.CENTER_ALIGNMENT);
-        heroPanel.add(heroTitle);
+        JPanel brandRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 0));
+        brandRow.setOpaque(false);
+        brandRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        brandRow.add(new SmartParkingMainFrame.LogoMark(36));
+        JLabel brand = new JLabel("Smart Parking");
+        brand.setFont(UITheme.font(Font.BOLD, 17));
+        brand.setForeground(UITheme.TEXT_PRIMARY);
+        brandRow.add(brand);
+        col.add(brandRow);
+        col.add(Box.createVerticalStrut(40));
 
-        JLabel heroSubtitle = new JLabel("Intelligent Facility Management (UP / India)");
-        heroSubtitle.setFont(new Font("Segoe UI", Font.PLAIN, 14));
-        heroSubtitle.setForeground(new Color(148, 163, 184));
-        heroSubtitle.setAlignmentX(Component.CENTER_ALIGNMENT);
-        heroPanel.add(heroSubtitle);
-        heroPanel.add(Box.createVerticalStrut(30));
+        JLabel heroTitle = new JLabel("<html>Run every level,<br>gate and bay from<br>one console.</html>");
+        heroTitle.setFont(UITheme.font(Font.BOLD, 30));
+        heroTitle.setForeground(UITheme.TEXT_PRIMARY);
+        heroTitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+        col.add(heroTitle);
+        col.add(Box.createVerticalStrut(14));
 
-        // Feature Bullets
-        addFeatureBullet(heroPanel, "150 Unified Slots with Neutral Bay Codes");
-        addFeatureBullet(heroPanel, "Automated UP / Bharat Plate ANPR (Simulated)");
-        addFeatureBullet(heroPanel, "GST Compliant Invoices & UPI / FASTag");
-        addFeatureBullet(heroPanel, "DPDP Act, 2023 Privacy & Consent Controls");
-        addFeatureBullet(heroPanel, "Role-Based Security & Append-Only Audit Trail");
+        JLabel heroSubtitle = new JLabel("<html>Grand Tech Park Garage &middot; Lucknow, UP</html>");
+        heroSubtitle.setFont(UITheme.font(Font.PLAIN, 14));
+        heroSubtitle.setForeground(UITheme.TEXT_SECONDARY);
+        heroSubtitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+        col.add(heroSubtitle);
+        col.add(Box.createVerticalStrut(28));
 
-        mainContainer.add(heroPanel);
+        addFeatureBullet(col, "Live bay status across 3 levels");
+        addFeatureBullet(col, "GST invoices with UPI, card and FASTag");
+        addFeatureBullet(col, "Role-based access and tamper-evident audit log");
 
-        // --- RIGHT LOGIN CARD ---
-        JPanel loginPanel = new JPanel();
-        loginPanel.setLayout(new BoxLayout(loginPanel, BoxLayout.Y_AXIS));
-        loginPanel.setBackground(Color.WHITE);
-        loginPanel.setBorder(BorderFactory.createEmptyBorder(35, 45, 35, 45));
+        GridBagConstraints gc = new GridBagConstraints();
+        gc.anchor = GridBagConstraints.NORTHWEST;
+        gc.weightx = 1;
+        gc.weighty = 1;
+        gc.fill = GridBagConstraints.HORIZONTAL;
+        hero.add(col, gc);
+        return hero;
+    }
 
-        JLabel loginTitle = new JLabel("Welcome Back");
-        loginTitle.setFont(new Font("Segoe UI", Font.BOLD, 24));
-        loginTitle.setForeground(UITheme.TEXT_DARK);
-        loginPanel.add(loginTitle);
+    /** Right half: sign-in form with inline validation and demo shortcuts. */
+    private JPanel buildFormPanel() {
+        JPanel outer = new JPanel(new GridBagLayout());
+        outer.setBackground(UITheme.BG_CANVAS);
 
-        JLabel loginSub = new JLabel("Sign in with authorized system credentials");
-        loginSub.setFont(UITheme.FONT_REGULAR);
-        loginSub.setForeground(UITheme.TEXT_MUTED);
-        loginPanel.add(loginSub);
-        loginPanel.add(Box.createVerticalStrut(20));
+        JPanel form = new JPanel(new GridBagLayout());
+        form.setOpaque(false);
+        GridBagConstraints c = new GridBagConstraints();
+        c.gridx = 0;
+        c.gridy = 0;
+        c.weightx = 1;
+        c.fill = GridBagConstraints.HORIZONTAL;
+        c.anchor = GridBagConstraints.WEST;
+
+        JLabel loginTitle = new JLabel("Sign in");
+        loginTitle.setFont(UITheme.font(Font.BOLD, 24));
+        loginTitle.setForeground(UITheme.TEXT_PRIMARY);
+        form.add(loginTitle, c);
+
+        c.gridy++;
+        c.insets = new Insets(6, 0, 28, 0);
+        JLabel loginSub = new JLabel("Use your operator or customer account.");
+        loginSub.setFont(UITheme.font(Font.PLAIN, 13));
+        loginSub.setForeground(UITheme.TEXT_SECONDARY);
+        form.add(loginSub, c);
 
         // Username
-        JPanel userRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-        userRow.setOpaque(false);
-        userRow.add(new JLabel(ImageLoader.getAuthIcon("user", 16)));
-        JLabel uLbl = new JLabel("Username:");
-        uLbl.setFont(UITheme.FONT_BOLD);
-        userRow.add(uLbl);
-        loginPanel.add(userRow);
-        loginPanel.add(Box.createVerticalStrut(4));
-
+        c.gridy++;
+        c.insets = new Insets(0, 0, 6, 0);
+        form.add(fieldLabel("Username"), c);
+        c.gridy++;
+        c.insets = new Insets(0, 0, 18, 0);
         usernameField = new JTextField("admin");
-        usernameField.setMaximumSize(new Dimension(Integer.MAX_VALUE, 38));
         UITheme.styleTextField(usernameField);
-        loginPanel.add(usernameField);
-        loginPanel.add(Box.createVerticalStrut(14));
+        usernameField.setPreferredSize(new Dimension(320, 40));
+        usernameField.getAccessibleContext().setAccessibleName("Username");
+        form.add(usernameField, c);
 
-        // Password Row
-        JPanel passRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-        passRow.setOpaque(false);
-        passRow.add(new JLabel(ImageLoader.getAuthIcon("password", 16)));
-        JLabel pLbl = new JLabel("Password:");
-        pLbl.setFont(UITheme.FONT_BOLD);
-        passRow.add(pLbl);
-        loginPanel.add(passRow);
-        loginPanel.add(Box.createVerticalStrut(4));
-
-        // Password Field with Show/Hide toggle
-        JPanel passBox = new JPanel(new BorderLayout(4, 0));
-        passBox.setOpaque(false);
-        passBox.setMaximumSize(new Dimension(Integer.MAX_VALUE, 38));
-
+        // Password
+        c.gridy++;
+        c.insets = new Insets(0, 0, 6, 0);
+        form.add(fieldLabel("Password"), c);
+        c.gridy++;
+        c.insets = new Insets(0, 0, 8, 0);
         passwordField = new JPasswordField("Admin@123");
         UITheme.styleTextField(passwordField);
+        passwordField.getAccessibleContext().setAccessibleName("Password");
 
-        eyeToggle = new JToggleButton("👁");
-        eyeToggle.setFont(new Font("Segoe UI Symbol", Font.PLAIN, 12));
-        eyeToggle.setToolTipText("Show / Hide Password");
+        eyeToggle = new JToggleButton(com.smartparking.ui.util.VectorIconUtil.getIcon(
+                com.smartparking.ui.util.VectorIconUtil.IconType.EYE, 16, UITheme.TEXT_TERTIARY));
+        eyeToggle.setSelectedIcon(com.smartparking.ui.util.VectorIconUtil.getIcon(
+                com.smartparking.ui.util.VectorIconUtil.IconType.EYE, 16, UITheme.ACCENT_TEXT));
+        eyeToggle.setToolTipText("Show / hide password");
+        eyeToggle.getAccessibleContext().setAccessibleName("Show password");
         eyeToggle.setFocusPainted(false);
-        eyeToggle.setBackground(new Color(241, 245, 249));
-        eyeToggle.addActionListener(e -> {
-            if (eyeToggle.isSelected()) {
-                passwordField.setEchoChar((char) 0);
-            } else {
-                passwordField.setEchoChar('•');
-            }
-        });
+        eyeToggle.setBorderPainted(false);
+        eyeToggle.setContentAreaFilled(false);
+        eyeToggle.setOpaque(false);
+        eyeToggle.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        eyeToggle.setPreferredSize(new Dimension(36, 36));
+        eyeToggle.addActionListener(e -> passwordField.setEchoChar(eyeToggle.isSelected() ? (char) 0 : '\u2022'));
 
+        JPanel passBox = new JPanel(new BorderLayout());
+        passBox.setOpaque(true);
+        passBox.setBackground(UITheme.BG_INPUT);
+        passBox.setBorder(new com.smartparking.ui.theme.DarkTheme.RoundBorder(UITheme.BORDER, UITheme.RADIUS));
+        passwordField.setBorder(BorderFactory.createEmptyBorder(8, 11, 8, 4));
+        passwordField.setOpaque(false);
         passBox.add(passwordField, BorderLayout.CENTER);
         passBox.add(eyeToggle, BorderLayout.EAST);
-        loginPanel.add(passBox);
-        loginPanel.add(Box.createVerticalStrut(20));
+        passBox.setPreferredSize(new Dimension(320, 40));
+        passwordField.addFocusListener(new java.awt.event.FocusAdapter() {
+            @Override public void focusGained(java.awt.event.FocusEvent e) { passBox.repaint(); }
+            @Override public void focusLost(java.awt.event.FocusEvent e) { passBox.repaint(); }
+        });
+        form.add(passBox, c);
 
-        // Sign In Button
-        ModernButton btnSignIn = new ModernButton("Sign In to System", ImageLoader.getAuthIcon("shield", 18));
-        btnSignIn.setFont(new Font("Segoe UI", Font.BOLD, 14));
-        btnSignIn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 42));
+        // Inline error / validation feedback
+        c.gridy++;
+        c.insets = new Insets(0, 0, 14, 0);
+        errorLabel = new JLabel(" ");
+        errorLabel.setFont(UITheme.font(Font.PLAIN, 12));
+        errorLabel.setForeground(UITheme.ERROR_TEXT);
+        errorLabel.setIcon(null);
+        form.add(errorLabel, c);
+
+        c.gridy++;
+        c.insets = new Insets(0, 0, 16, 0);
+        btnSignIn = new ModernButton("Sign in", null);
+        btnSignIn.setFont(UITheme.font(Font.BOLD, 14));
+        btnSignIn.setPreferredSize(new Dimension(320, 42));
         btnSignIn.addActionListener(e -> performLogin());
-        loginPanel.add(btnSignIn);
-        loginPanel.add(Box.createVerticalStrut(14));
+        form.add(btnSignIn, c);
 
-        // Customer Self-Registration Link
-        JPanel regRow = new JPanel(new FlowLayout(FlowLayout.CENTER));
+        c.gridy++;
+        c.insets = new Insets(0, 0, 30, 0);
+        JPanel regRow = new JPanel(new FlowLayout(FlowLayout.CENTER, 6, 0));
         regRow.setOpaque(false);
-        JButton btnRegister = new JButton("New Customer? Register here →");
-        btnRegister.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        btnRegister.setForeground(new Color(37, 99, 235));
+        JLabel newHere = new JLabel("New customer?");
+        newHere.setFont(UITheme.font(Font.PLAIN, 13));
+        newHere.setForeground(UITheme.TEXT_SECONDARY);
+        JButton btnRegister = new JButton("Create an account");
+        btnRegister.setFont(UITheme.font(Font.BOLD, 13));
+        btnRegister.setForeground(UITheme.ACCENT_TEXT);
         btnRegister.setBorderPainted(false);
         btnRegister.setContentAreaFilled(false);
+        btnRegister.setFocusPainted(false);
+        btnRegister.setMargin(new Insets(0, 0, 0, 0));
+        btnRegister.setBorder(BorderFactory.createEmptyBorder());
         btnRegister.setCursor(new Cursor(Cursor.HAND_CURSOR));
         btnRegister.addActionListener(e -> showCustomerRegistrationDialog());
+        regRow.add(newHere);
         regRow.add(btnRegister);
-        loginPanel.add(regRow);
-        loginPanel.add(Box.createVerticalStrut(14));
+        form.add(regRow, c);
 
-        // Quick Role Login Shortcuts
-        JLabel quickLbl = new JLabel("Quick Demo Role Previews:");
-        quickLbl.setFont(UITheme.FONT_SMALL);
-        quickLbl.setForeground(UITheme.TEXT_MUTED);
-        loginPanel.add(quickLbl);
-        loginPanel.add(Box.createVerticalStrut(6));
+        // Divider with caption
+        c.gridy++;
+        c.insets = new Insets(0, 0, 12, 0);
+        JPanel divider = new JPanel(new GridBagLayout());
+        divider.setOpaque(false);
+        GridBagConstraints d = new GridBagConstraints();
+        d.fill = GridBagConstraints.HORIZONTAL;
+        d.weightx = 1;
+        divider.add(hairline(), d);
+        d.weightx = 0;
+        d.insets = new Insets(0, 10, 0, 10);
+        JLabel quickLbl = new JLabel("DEMO ACCOUNTS");
+        quickLbl.setFont(UITheme.FONT_CAPTION);
+        quickLbl.setForeground(UITheme.TEXT_TERTIARY);
+        divider.add(quickLbl, d);
+        d.weightx = 1;
+        d.insets = new Insets(0, 0, 0, 0);
+        divider.add(hairline(), d);
+        form.add(divider, c);
 
+        c.gridy++;
+        c.insets = new Insets(0, 0, 0, 0);
         JPanel quickGrid = new JPanel(new GridLayout(1, 3, 8, 0));
         quickGrid.setOpaque(false);
-        quickGrid.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+        quickGrid.add(demoButton("Admin", "admin", "Admin@123"));
+        quickGrid.add(demoButton("Attendant", "attendant1", "Attendant@123"));
+        quickGrid.add(demoButton("Customer", "customer1", "Customer@123"));
+        form.add(quickGrid, c);
 
-        JButton qAdmin = new JButton("Admin");
-        qAdmin.setFont(UITheme.FONT_SMALL);
-        qAdmin.addActionListener(e -> { usernameField.setText("admin"); passwordField.setText("Admin@123"); });
+        outer.add(form, new GridBagConstraints());
+        return outer;
+    }
 
-        JButton qAttendant = new JButton("Attendant");
-        qAttendant.setFont(UITheme.FONT_SMALL);
-        qAttendant.addActionListener(e -> { usernameField.setText("attendant1"); passwordField.setText("Attendant@123"); });
+    private ModernButton demoButton(String text, String user, String pass) {
+        ModernButton b = ModernButton.createSecondary(text, null).compact();
+        b.setToolTipText("Fill in the " + text.toLowerCase() + " demo credentials");
+        b.addActionListener(e -> {
+            usernameField.setText(user);
+            passwordField.setText(pass);
+            clearError();
+            passwordField.requestFocusInWindow();
+        });
+        return b;
+    }
 
-        JButton qCustomer = new JButton("Customer");
-        qCustomer.setFont(UITheme.FONT_SMALL);
-        qCustomer.addActionListener(e -> { usernameField.setText("customer1"); passwordField.setText("Customer@123"); });
+    private static JLabel fieldLabel(String text) {
+        JLabel l = new JLabel(text);
+        l.setFont(UITheme.font(Font.BOLD, 12));
+        l.setForeground(UITheme.TEXT_BODY);
+        return l;
+    }
 
-        quickGrid.add(qAdmin);
-        quickGrid.add(qAttendant);
-        quickGrid.add(qCustomer);
-        loginPanel.add(quickGrid);
+    private static JComponent hairline() {
+        JPanel line = new JPanel();
+        line.setBackground(UITheme.BORDER_SUBTLE);
+        line.setPreferredSize(new Dimension(10, 1));
+        return line;
+    }
 
-        mainContainer.add(loginPanel);
-        setContentPane(mainContainer);
+    private void showError(String msg) {
+        errorLabel.setText(msg);
+        errorLabel.setIcon(com.smartparking.ui.util.VectorIconUtil.getIcon(
+                com.smartparking.ui.util.VectorIconUtil.IconType.ALERT, 13, UITheme.ERROR_TEXT));
+    }
+
+    private void clearError() {
+        errorLabel.setText(" ");
+        errorLabel.setIcon(null);
     }
 
     private void addFeatureBullet(JPanel panel, String text) {
-        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 4));
+        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 5));
         row.setOpaque(false);
-        JLabel check = new JLabel("✓");
-        check.setFont(new Font("Segoe UI", Font.BOLD, 14));
-        check.setForeground(new Color(56, 189, 248));
-        JLabel lbl = new JLabel(text);
-        lbl.setFont(UITheme.FONT_REGULAR);
-        lbl.setForeground(new Color(226, 232, 240));
-        row.add(check);
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel lbl = new JLabel(text, com.smartparking.ui.util.VectorIconUtil.getIcon(
+                com.smartparking.ui.util.VectorIconUtil.IconType.CHECK, 14, UITheme.ACCENT_TEXT), SwingConstants.LEFT);
+        lbl.setIconTextGap(12);
+        lbl.setFont(UITheme.font(Font.PLAIN, 14));
+        lbl.setForeground(UITheme.TEXT_BODY);
         row.add(lbl);
         panel.add(row);
     }
@@ -271,9 +370,11 @@ public class LoginFrame extends JFrame {
         String password = new String(passwordField.getPassword()).trim();
 
         if (username.isEmpty() || password.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "Please enter both username and password.", "Login", JOptionPane.WARNING_MESSAGE);
+            showError(username.isEmpty() ? "Enter your username." : "Enter your password.");
+            (username.isEmpty() ? usernameField : passwordField).requestFocusInWindow();
             return;
         }
+        clearError();
 
         try {
             Optional<User> userOpt = authService.authenticate(username, password);
@@ -292,11 +393,13 @@ public class LoginFrame extends JFrame {
                 });
             }
         } catch (AccountLockedException ale) {
-            JOptionPane.showMessageDialog(this, ale.getMessage(), "Account Locked", JOptionPane.ERROR_MESSAGE);
+            showError(ale.getMessage());
         } catch (AuthException ae) {
-            JOptionPane.showMessageDialog(this, ae.getMessage(), "Authentication Failed", JOptionPane.ERROR_MESSAGE);
+            showError(ae.getMessage());
+            passwordField.selectAll();
+            passwordField.requestFocusInWindow();
         } catch (Exception ex) {
-            JOptionPane.showMessageDialog(this, "Login error: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+            showError("Sign-in failed: " + ex.getMessage());
         }
     }
 
@@ -342,7 +445,7 @@ public class LoginFrame extends JFrame {
         JTextField userField = new JTextField(15);
         JPasswordField passField = new JPasswordField(15);
         JCheckBox consentBox = new JCheckBox("I agree to the collection and use of my mobile number and vehicle number for parking services.");
-        consentBox.setFont(new Font("Segoe UI", Font.PLAIN, 11));
+        consentBox.setFont(UITheme.font(Font.PLAIN, 11));
 
         JPanel p = new JPanel();
         p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));

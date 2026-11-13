@@ -57,54 +57,31 @@ public class CustomerDataPanel extends JPanel {
 
         setLayout(new BorderLayout(0, 16));
         setBackground(UITheme.BG_CANVAS);
-        setBorder(new EmptyBorder(24, 24, 24, 24));
+        setBorder(new EmptyBorder(24, 28, 24, 28));
 
         // Top Header
-        JPanel header = new JPanel(new BorderLayout());
-        header.setOpaque(false);
+        com.smartparking.ui.components.PageHeader header = new com.smartparking.ui.components.PageHeader(
+                "My data & privacy", "DPDP Act, 2023 · access, download or request erasure of your personal data");
+        profileLabel = header.getSubtitleLabel();
 
-        JPanel titleBox = new JPanel(new GridLayout(2, 1, 0, 4));
-        titleBox.setOpaque(false);
-        JLabel title = new JLabel("My Personal Data & Privacy Portal");
-        title.setFont(new Font("Segoe UI", Font.BOLD, 22));
-        title.setForeground(new Color(15, 23, 42));
-
-        profileLabel = new JLabel("DPDP Act, 2023 — Data Principal Access & Portability");
-        profileLabel.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        profileLabel.setForeground(new Color(100, 116, 139));
-        titleBox.add(title);
-        titleBox.add(profileLabel);
-        header.add(titleBox, BorderLayout.WEST);
-
-        // Right Download & Erasure Actions
-        JPanel actionBox = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
-        actionBox.setOpaque(false);
-
-        ModernButton btnJson = new ModernButton("Download Data (JSON)", null,
-                new Color(37, 99, 235), new Color(29, 78, 216), Color.WHITE);
-        btnJson.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        ModernButton btnJson = ModernButton.createSecondary("Download JSON",
+                com.smartparking.ui.util.VectorIconUtil.getIcon(com.smartparking.ui.util.VectorIconUtil.IconType.DOWNLOAD, 14, UITheme.TEXT_SECONDARY));
         btnJson.addActionListener(e -> exportJson());
-
-        ModernButton btnCsv = new ModernButton("Download Data (CSV)", null,
-                new Color(16, 185, 129), new Color(5, 150, 105), Color.WHITE);
-        btnCsv.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        ModernButton btnCsv = ModernButton.createSecondary("Download CSV",
+                com.smartparking.ui.util.VectorIconUtil.getIcon(com.smartparking.ui.util.VectorIconUtil.IconType.DOWNLOAD, 14, UITheme.TEXT_SECONDARY));
         btnCsv.addActionListener(e -> exportCsv());
-
-        ModernButton btnDelete = new ModernButton("Request Data Deletion", null,
-                new Color(239, 68, 68), new Color(220, 38, 38), Color.WHITE);
-        btnDelete.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        ModernButton btnDelete = ModernButton.createDanger("Request deletion", null);
+        btnDelete.setToolTipText("Ask for your personal identifiers to be erased (DPDP right to erasure)");
         btnDelete.addActionListener(e -> requestDataDeletion());
-
-        actionBox.add(btnJson);
-        actionBox.add(btnCsv);
-        actionBox.add(btnDelete);
-        header.add(actionBox, BorderLayout.EAST);
+        header.addAction(btnJson);
+        header.addAction(btnCsv);
+        header.addAction(btnDelete);
 
         add(header, BorderLayout.NORTH);
 
         // Center Content with Tabs
         JTabbedPane tabs = new JTabbedPane();
-        tabs.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        tabs.setFont(UITheme.font(Font.BOLD, 12));
 
         // Tab 1: Linked Vehicles
         vehicleModel = new DefaultTableModel(new String[]{"License Plate", "State / Series", "Registered Date"}, 0);
@@ -137,7 +114,9 @@ public class CustomerDataPanel extends JPanel {
 
         add(tabs, BorderLayout.CENTER);
 
-        refreshData();
+        // Load eagerly only for roles allowed to see this screen (the main window builds every panel up front;
+        // without this guard a customer sign-in threw SecurityException). refreshData() still enforces RBAC.
+        if (AccessControl.hasPermission(Permission.CUSTOMER_VIEW_OWN_DATA)) refreshData();
     }
 
     public void refreshData() {

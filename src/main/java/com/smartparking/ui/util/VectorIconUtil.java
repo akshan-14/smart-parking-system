@@ -51,7 +51,10 @@ public final class VectorIconUtil {
         GRID,
         SETTINGS,
         BELL,
-        LIGHTNING
+        LIGHTNING,
+        SHIELD,
+        USERS,
+        DOCUMENT
     }
 
     private VectorIconUtil() {}
@@ -465,6 +468,38 @@ public final class VectorIconUtil {
                     g2.draw(bell);
                     g2.draw(new Line2D.Float(w * 0.15f, h * 0.75f, w * 0.85f, h * 0.75f));
                     g2.draw(new Arc2D.Float(w * 0.42f, h * 0.76f, w * 0.16f, h * 0.14f, 180, 180, Arc2D.OPEN));
+                }
+                case SHIELD -> {
+                    Path2D.Float sh = new Path2D.Float();
+                    sh.moveTo(w * 0.50f, h * 0.12f);
+                    sh.lineTo(w * 0.80f, h * 0.24f);
+                    sh.curveTo(w * 0.80f, h * 0.58f, w * 0.68f, h * 0.78f, w * 0.50f, h * 0.88f);
+                    sh.curveTo(w * 0.32f, h * 0.78f, w * 0.20f, h * 0.58f, w * 0.20f, h * 0.24f);
+                    sh.closePath();
+                    g2.draw(sh);
+                    Path2D.Float tick = new Path2D.Float();
+                    tick.moveTo(w * 0.37f, h * 0.50f);
+                    tick.lineTo(w * 0.47f, h * 0.60f);
+                    tick.lineTo(w * 0.64f, h * 0.40f);
+                    g2.draw(tick);
+                }
+                case USERS -> {
+                    g2.draw(new Ellipse2D.Float(w * 0.20f, h * 0.20f, w * 0.28f, h * 0.28f));
+                    g2.draw(new Arc2D.Float(w * 0.08f, h * 0.54f, w * 0.52f, h * 0.40f, 0, 180, Arc2D.OPEN));
+                    g2.draw(new Arc2D.Float(w * 0.56f, h * 0.22f, w * 0.24f, h * 0.24f, -60, 240, Arc2D.OPEN));
+                    g2.draw(new Arc2D.Float(w * 0.58f, h * 0.54f, w * 0.34f, h * 0.36f, 0, 90, Arc2D.OPEN));
+                }
+                case DOCUMENT -> {
+                    Path2D.Float d = new Path2D.Float();
+                    d.moveTo(w * 0.24f, h * 0.12f);
+                    d.lineTo(w * 0.60f, h * 0.12f);
+                    d.lineTo(w * 0.78f, h * 0.30f);
+                    d.lineTo(w * 0.78f, h * 0.88f);
+                    d.lineTo(w * 0.24f, h * 0.88f);
+                    d.closePath();
+                    g2.draw(d);
+                    g2.draw(new Line2D.Float(w * 0.36f, h * 0.48f, w * 0.66f, h * 0.48f));
+                    g2.draw(new Line2D.Float(w * 0.36f, h * 0.64f, w * 0.66f, h * 0.64f));
                 }
                 case LIGHTNING -> {
                     Path2D.Float bolt = new Path2D.Float();

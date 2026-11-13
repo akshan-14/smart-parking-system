@@ -134,11 +134,11 @@ public final class I18n {
         if (isHindi()) {
             return getDevanagariFont(style, size);
         }
-        return new Font("Segoe UI", style, (int) size);
+        return com.smartparking.ui.theme.UITheme.font(style, size);
     }
 
     private static Font getDevanagariFont(int style, float size) {
-        String[] preferredFonts = {"Nirmala UI", "Mangal", "Kokila", "Utsaah", "Arial Unicode MS", "Segoe UI", "SansSerif"};
+        String[] preferredFonts = {"Nirmala UI", "Kohinoor Devanagari", "Noto Sans Devanagari", "Devanagari Sangam MN", "Devanagari MT", "Mangal", "Kokila", "Utsaah", "Arial Unicode MS"};
         GraphicsEnvironment ge = GraphicsEnvironment.getLocalGraphicsEnvironment();
         Set<String> available = new HashSet<>(Arrays.asList(ge.getAvailableFontFamilyNames()));
 

@@ -35,10 +35,8 @@ public class UserManagementPanel extends JPanel {
 
         setLayout(new BorderLayout(0, 16));
         setBackground(UITheme.BG_CANVAS);
-        setBorder(new EmptyBorder(24, 24, 24, 24));
+        setBorder(new EmptyBorder(24, 28, 24, 28));
 
-        // Top Header and Controls
-        add(buildHeader(), BorderLayout.NORTH);
 
         // Center Table
         String[] columns = {"User ID", "Username", "Full Name", "Mobile (Masked)", "Role", "Status", "Failed Attempts", "Last Login"};
@@ -51,86 +49,56 @@ public class UserManagementPanel extends JPanel {
 
         userTable = new JTable(tableModel);
         userTable.setRowHeight(32);
-        userTable.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        userTable.getTableHeader().setFont(new Font("Segoe UI", Font.BOLD, 12));
-        userTable.getTableHeader().setBackground(new Color(241, 245, 249));
-        userTable.getTableHeader().setForeground(new Color(30, 41, 59));
-        userTable.setSelectionBackground(new Color(224, 242, 254));
-        userTable.setSelectionForeground(new Color(15, 23, 42));
+        userTable.setFont(UITheme.font(Font.PLAIN, 12));
+        userTable.getTableHeader().setFont(UITheme.font(Font.BOLD, 12));
+        userTable.getTableHeader().setBackground(UITheme.BG_ELEVATED);
+        userTable.getTableHeader().setForeground(UITheme.TEXT_PRIMARY);
+        userTable.setSelectionBackground(UITheme.BG_HOVER);
+        userTable.setSelectionForeground(UITheme.TEXT_PRIMARY);
 
-        // Status Renderer
-        userTable.getColumnModel().getColumn(5).setCellRenderer(new DefaultTableCellRenderer() {
-            @Override
-            public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int col) {
-                Component c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, col);
-                String val = String.valueOf(value);
-                if ("ACTIVE".equalsIgnoreCase(val)) {
-                    setForeground(new Color(22, 101, 52));
-                    setFont(getFont().deriveFont(Font.BOLD));
-                } else {
-                    setForeground(new Color(185, 28, 28));
-                    setFont(getFont().deriveFont(Font.BOLD));
-                }
-                return c;
-            }
-        });
+        // Status column: shared status-pill renderer
+        userTable.getColumnModel().getColumn(5).setCellRenderer(new com.smartparking.ui.components.Badge.Renderer());
+        userTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
 
         JScrollPane scrollPane = new JScrollPane(userTable);
-        scrollPane.setBorder(BorderFactory.createLineBorder(new Color(226, 232, 240)));
-        scrollPane.getViewport().setBackground(Color.WHITE);
+        scrollPane.setBorder(new com.smartparking.ui.theme.DarkTheme.RoundBorder(UITheme.BORDER_SUBTLE, UITheme.RADIUS));
+        scrollPane.getViewport().setBackground(UITheme.BG_CARD);
 
         add(scrollPane, BorderLayout.CENTER);
+        add(buildHeader(), BorderLayout.NORTH);
 
-        // Actions toolbar
-        add(buildActionsToolbar(), BorderLayout.SOUTH);
 
-        refreshData();
+        // Load eagerly only for roles allowed to see this screen (the main window builds every panel up front;
+        // without this guard a customer sign-in threw SecurityException). refreshData() still enforces RBAC.
+        if (AccessControl.hasPermission(Permission.MANAGE_USERS)) refreshData();
     }
 
     private JPanel buildHeader() {
-        JPanel header = new JPanel(new BorderLayout());
-        header.setOpaque(false);
+        com.smartparking.ui.components.PageHeader header = new com.smartparking.ui.components.PageHeader(
+                "Users & access", "Operator and customer accounts, roles and sign-in status");
 
-        JPanel titleBox = new JPanel(new GridLayout(2, 1, 0, 4));
-        titleBox.setOpaque(false);
-        JLabel title = new JLabel("User & Access Management");
-        title.setFont(new Font("Segoe UI", Font.BOLD, 22));
-        title.setForeground(new Color(15, 23, 42));
-
-        JLabel sub = new JLabel("System Administrator role management, account provisioning, and access controls");
-        sub.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        sub.setForeground(new Color(100, 116, 139));
-        titleBox.add(title);
-        titleBox.add(sub);
-        header.add(titleBox, BorderLayout.WEST);
-
-        return header;
-    }
-
-    private JPanel buildActionsToolbar() {
-        JPanel bar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 12, 0));
-        bar.setOpaque(false);
-
-        ModernButton btnCreate = new ModernButton("+ Create User", null,
-                new Color(37, 99, 235), new Color(29, 78, 216), Color.WHITE);
-        btnCreate.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        ModernButton btnToggle = ModernButton.createSecondary("Activate / deactivate", null);
+        btnToggle.setToolTipText("Enable or disable the selected account");
+        btnToggle.addActionListener(e -> toggleUserStatus());
+        ModernButton btnResetPw = ModernButton.createSecondary("Reset password",
+                com.smartparking.ui.util.VectorIconUtil.getIcon(com.smartparking.ui.util.VectorIconUtil.IconType.SHIELD, 14, UITheme.TEXT_SECONDARY));
+        btnResetPw.addActionListener(e -> showResetPasswordDialog());
+        ModernButton btnCreate = new ModernButton("New user",
+                com.smartparking.ui.util.VectorIconUtil.getIcon(com.smartparking.ui.util.VectorIconUtil.IconType.PLUS, 13, Color.WHITE));
         btnCreate.addActionListener(e -> showCreateUserDialog());
 
-        ModernButton btnToggle = new ModernButton("Activate / Deactivate", null,
-                new Color(245, 158, 11), new Color(217, 119, 6), Color.WHITE);
-        btnToggle.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        btnToggle.addActionListener(e -> toggleUserStatus());
+        btnToggle.setEnabled(false);
+        btnResetPw.setEnabled(false);
+        userTable.getSelectionModel().addListSelectionListener(e -> {
+            boolean sel = userTable.getSelectedRow() >= 0;
+            btnToggle.setEnabled(sel);
+            btnResetPw.setEnabled(sel);
+        });
 
-        ModernButton btnResetPw = new ModernButton("Reset Password", null,
-                new Color(239, 68, 68), new Color(220, 38, 38), Color.WHITE);
-        btnResetPw.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        btnResetPw.addActionListener(e -> showResetPasswordDialog());
-
-        bar.add(btnCreate);
-        bar.add(btnToggle);
-        bar.add(btnResetPw);
-
-        return bar;
+        header.addAction(btnToggle);
+        header.addAction(btnResetPw);
+        header.addAction(btnCreate);
+        return header;
     }
 
     public void refreshData() {
@@ -191,10 +159,10 @@ public class UserManagementPanel extends JPanel {
                 String extra = extraField.getText().trim();
 
                 authService.adminCreateUser(name, mobile, user + "@smartparking.up.gov.in", user, pwd, role, extra);
-                JOptionPane.showMessageDialog(this, "User created successfully!", "Success", JOptionPane.INFORMATION_MESSAGE);
+                com.smartparking.ui.components.Toast.success(this, "User created successfully!", null);
                 refreshData();
             } catch (Exception ex) {
-                JOptionPane.showMessageDialog(this, "Error creating user: " + ex.getMessage(), "Validation Error", JOptionPane.ERROR_MESSAGE);
+                com.smartparking.ui.components.Toast.error(this, "Error creating user: " + ex.getMessage(), null);
             }
         }
     }
@@ -202,7 +170,7 @@ public class UserManagementPanel extends JPanel {
     private void toggleUserStatus() {
         int selectedRow = userTable.getSelectedRow();
         if (selectedRow < 0) {
-            JOptionPane.showMessageDialog(this, "Please select a user to activate/deactivate.", "Notice", JOptionPane.WARNING_MESSAGE);
+            com.smartparking.ui.components.Toast.info(this, "Please select a user to activate/deactivate.", null);
             return;
         }
 
@@ -211,22 +179,27 @@ public class UserManagementPanel extends JPanel {
 
         try {
             if ("ACTIVE".equalsIgnoreCase(currentStatus)) {
+                String uname = String.valueOf(tableModel.getValueAt(selectedRow, 1));
+                int ok = JOptionPane.showConfirmDialog(this,
+                        "Deactivate @" + uname + "?\nThey won't be able to sign in until the account is reactivated.",
+                        "Deactivate user", JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
+                if (ok != JOptionPane.OK_OPTION) return;
                 authService.adminDeactivateUser(userId);
-                JOptionPane.showMessageDialog(this, "User #" + userId + " deactivated.", "Success", JOptionPane.INFORMATION_MESSAGE);
+                com.smartparking.ui.components.Toast.success(this, "User #" + userId + " deactivated.", null);
             } else {
                 authService.adminActivateUser(userId);
-                JOptionPane.showMessageDialog(this, "User #" + userId + " reactivated.", "Success", JOptionPane.INFORMATION_MESSAGE);
+                com.smartparking.ui.components.Toast.success(this, "User #" + userId + " reactivated.", null);
             }
             refreshData();
         } catch (Exception ex) {
-            JOptionPane.showMessageDialog(this, "Action failed: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+            com.smartparking.ui.components.Toast.error(this, "Action failed: " + ex.getMessage(), null);
         }
     }
 
     private void showResetPasswordDialog() {
         int selectedRow = userTable.getSelectedRow();
         if (selectedRow < 0) {
-            JOptionPane.showMessageDialog(this, "Please select a user to reset password.", "Notice", JOptionPane.WARNING_MESSAGE);
+            com.smartparking.ui.components.Toast.info(this, "Please select a user to reset password.", null);
             return;
         }
 
@@ -243,9 +216,9 @@ public class UserManagementPanel extends JPanel {
             String pwd = new String(newPass.getPassword());
             try {
                 authService.adminResetPassword(userId, pwd);
-                JOptionPane.showMessageDialog(this, "Password reset successfully for @" + username, "Success", JOptionPane.INFORMATION_MESSAGE);
+                com.smartparking.ui.components.Toast.success(this, "Password reset successfully for @" + username, null);
             } catch (Exception ex) {
-                JOptionPane.showMessageDialog(this, "Failed to reset password: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+                com.smartparking.ui.components.Toast.error(this, "Failed to reset password: " + ex.getMessage(), null);
             }
         }
     }

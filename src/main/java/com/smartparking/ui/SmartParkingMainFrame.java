@@ -14,23 +14,34 @@ import com.smartparking.ui.panels.*;
 import com.smartparking.ui.theme.UITheme;
 import com.smartparking.ui.util.ImageLoader;
 import com.smartparking.ui.util.VectorIconUtil;
+import com.smartparking.ui.util.VectorIconUtil.IconType;
+import com.smartparking.util.I18n;
 
 import javax.swing.*;
+import javax.swing.border.EmptyBorder;
+import javax.swing.border.MatteBorder;
 import java.awt.*;
-import java.awt.event.AWTEventListener;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Main application window faithfully matching the modern Tailwind-based dashboard:
- * - TopBar (#0B1329): Blue logo tile, facility address, pulsing "SYSTEM ACTIVE" capsule,
- *   admin profile badge with role tag, and blue "Sign Out" action.
- * - Sidebar Navigation (#0D1527, 240px): Dynamically filtered by RBAC permissions,
- *   high-contrast links with specialized icon accents, active blue pill highlight, divider.
- * - Center CardLayout: Seamless switching between allowed screens.
- * - Session Management: Automatic inactivity detection, warning toast, and logout timer.
+ * Application shell.
+ * <ul>
+ *   <li><b>Sidebar</b> (248px, collapses to 68px below 900px window width): brand, RBAC-filtered
+ *       navigation grouped into Operations / Administration / Account, capacity footer.</li>
+ *   <li><b>Top bar</b> (56px): breadcrumb of the current screen, language toggle, live status pill,
+ *       user chip (initials avatar, name, role) and Sign Out.</li>
+ *   <li><b>Content</b>: CardLayout with every screen; panels refresh on arrival.</li>
+ *   <li><b>Session management</b>: inactivity tracking with warning and automatic logout.</li>
+ * </ul>
  */
 public class SmartParkingMainFrame extends JFrame {
+
+    private static final int SIDEBAR_WIDTH = 248;
+    private static final int SIDEBAR_COLLAPSED = 68;
+    private static final Color SIDEBAR_HOVER = UITheme.blend(Color.WHITE, UITheme.BG_APP, 0.045);
+    private static final Color SIDEBAR_ACTIVE = UITheme.blend(UITheme.ACCENT, UITheme.BG_APP, 0.16);
 
     private final User currentUser;
     private final ParkingLot parkingLot;
@@ -59,8 +70,16 @@ public class SmartParkingMainFrame extends JFrame {
 
     // Navigation tracking
     private final Map<String, NavButton> navButtons = new HashMap<>();
+    private final java.util.List<JComponent> sectionLabels = new java.util.ArrayList<>();
     private String currentCard = "DASHBOARD";
     private javax.swing.Timer sessionTimer;
+
+    // Shell widgets that change with navigation / collapse
+    private JLabel breadcrumbPage;
+    private JPanel sidebarPanel;
+    private JPanel brandText;
+    private JPanel sidebarFooter;
+    private boolean isSidebarCollapsed = false;
 
     public SmartParkingMainFrame(User currentUser, ParkingLot parkingLot, ParkingService parkingService) {
         super("Smart Parking System - Grand Tech Park Garage");
@@ -80,31 +99,29 @@ public class SmartParkingMainFrame extends JFrame {
 
     private void initUI() {
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setSize(1320, 840);
+        setSize(1360, 860);
         setMinimumSize(new Dimension(1080, 700));
         setLocationRelativeTo(null);
+        getContentPane().setBackground(UITheme.BG_APP);
 
-        // Window Icon
         Image appIcon = ImageLoader.loadImage("images/logo_small.png");
         if (appIcon != null) {
             setIconImage(appIcon);
         }
 
         JPanel root = new JPanel(new BorderLayout());
-        root.setBackground(UITheme.BG_CANVAS);
+        root.setBackground(UITheme.BG_APP);
 
-        // 1. Header (North)
-        root.add(buildHeader(), BorderLayout.NORTH);
-
-        // 2. Sidebar Navigation (West)
         root.add(buildSidebar(), BorderLayout.WEST);
 
-        // 3. Central Card Deck (Center)
+        JPanel main = new JPanel(new BorderLayout());
+        main.setBackground(UITheme.BG_CANVAS);
+        main.add(buildHeader(), BorderLayout.NORTH);
+
         cardLayout = new CardLayout();
         cardsPanel = new JPanel(cardLayout);
         cardsPanel.setBackground(UITheme.BG_CANVAS);
 
-        // Build Panels with state synchronization
         Runnable onStateChange = this::handleStateChange;
 
         dashboardPanel = new DashboardPanel(parkingLot, parkingService, this::navigateTo);
@@ -135,32 +152,50 @@ public class SmartParkingMainFrame extends JFrame {
         cardsPanel.add(privacyNoticePanel, "PRIVACY");
         cardsPanel.add(customerDataPanel, "MY_DATA");
 
-        root.add(cardsPanel, BorderLayout.CENTER);
+        main.add(cardsPanel, BorderLayout.CENTER);
+        root.add(main, BorderLayout.CENTER);
         setContentPane(root);
 
-        // Select initial card based on RBAC allowance
+        // Keyboard shortcuts: Ctrl+1..9 jump to the first nine permitted screens
+        installNavShortcuts(root);
+
         String initialCard = AccessControl.isScreenAllowed(currentUser.getRole(), "DASHBOARD") ? "DASHBOARD" : "RESERVATIONS";
         navigateTo(initialCard);
     }
 
+    private void installNavShortcuts(JComponent root) {
+        int i = 1;
+        for (String key : navOrder.keySet()) {
+            if (!navButtons.containsKey(key) || i > 9) continue;
+            final String target = key;
+            KeyStroke ks = KeyStroke.getKeyStroke("ctrl " + i);
+            root.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(ks, "nav-" + key);
+            root.getActionMap().put("nav-" + key, new AbstractAction() {
+                @Override
+                public void actionPerformed(java.awt.event.ActionEvent e) {
+                    navigateTo(target);
+                }
+            });
+            NavButton b = navButtons.get(key);
+            b.setShortcutHint("Ctrl+" + i);
+            i++;
+        }
+    }
+
     private void initSessionTracking() {
-        // Record user activity on any mouse or keyboard input
         try {
-            Toolkit.getDefaultToolkit().addAWTEventListener(event -> {
-                UserSession.getInstance().recordActivity();
-            }, AWTEvent.MOUSE_EVENT_MASK | AWTEvent.KEY_EVENT_MASK);
+            Toolkit.getDefaultToolkit().addAWTEventListener(event -> UserSession.getInstance().recordActivity(),
+                    AWTEvent.MOUSE_EVENT_MASK | AWTEvent.KEY_EVENT_MASK);
         } catch (SecurityException ignored) {
         }
 
         UserSession.getInstance().addListener(new UserSession.SessionListener() {
             @Override
             public void onWarning(int minutesRemaining) {
-                SwingUtilities.invokeLater(() -> {
-                    JOptionPane.showMessageDialog(SmartParkingMainFrame.this,
-                            "Your session will expire in 1 minute due to inactivity.",
-                            "Session Timeout Warning",
-                            JOptionPane.WARNING_MESSAGE);
-                });
+                SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(SmartParkingMainFrame.this,
+                        "Your session will expire in 1 minute due to inactivity.",
+                        "Session Timeout Warning",
+                        JOptionPane.WARNING_MESSAGE));
             }
 
             @Override
@@ -181,267 +216,275 @@ public class SmartParkingMainFrame extends JFrame {
         sessionTimer.start();
     }
 
-    /**
-     * Top persistent header bar (#0B1329) matching the HTML Tailwind TopBar:
-     * - Left: Blue brand square with parking "P" contour, title, subtitle.
-     * - Right: Operational pill, profile badge, and blue Sign Out button.
-     */
+    // =====================================================================================
+    // Top bar
+    // =====================================================================================
     private JPanel buildHeader() {
         JPanel header = new JPanel(new BorderLayout());
-        header.setBackground(UITheme.TOPBAR_BG);
-        header.setPreferredSize(new Dimension(getWidth(), 56));
+        header.setBackground(UITheme.BG_APP);
+        header.setPreferredSize(new Dimension(10, 56));
         header.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(0, 0, 1, 0, new Color(30, 41, 59)),
-                BorderFactory.createEmptyBorder(8, 18, 8, 18)
-        ));
+                new MatteBorder(0, 0, 1, 0, UITheme.BORDER_SUBTLE),
+                new EmptyBorder(0, 24, 0, 16)));
 
-        // Left Branding
-        JPanel brandPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 0));
-        brandPanel.setOpaque(false);
+        // Left: breadcrumb
+        JPanel crumbs = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        crumbs.setOpaque(false);
+        JLabel facility = new JLabel("Grand Tech Park Garage");
+        facility.setFont(UITheme.font(Font.PLAIN, 13));
+        facility.setForeground(UITheme.TEXT_TERTIARY);
+        JLabel slash = new JLabel("/");
+        slash.setFont(UITheme.font(Font.PLAIN, 13));
+        slash.setForeground(UITheme.BORDER_STRONG);
+        breadcrumbPage = new JLabel("Overview");
+        breadcrumbPage.setFont(UITheme.font(Font.BOLD, 13));
+        breadcrumbPage.setForeground(UITheme.TEXT_PRIMARY);
+        crumbs.add(facility);
+        crumbs.add(slash);
+        crumbs.add(breadcrumbPage);
+        JPanel crumbWrap = new JPanel(new GridBagLayout());
+        crumbWrap.setOpaque(false);
+        crumbWrap.add(crumbs);
+        header.add(crumbWrap, BorderLayout.WEST);
 
-        JPanel logoTile = new JPanel(new GridBagLayout()) {
-            @Override
-            protected void paintComponent(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(UITheme.PRIMARY_BLUE);
-                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 8, 8);
-                g2.setColor(Color.WHITE);
-                g2.setStroke(new BasicStroke(2.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-                int cx = getWidth() / 2;
-                int cy = getHeight() / 2;
-                g2.drawRoundRect(cx - 9, cy - 9, 18, 18, 4, 4);
-                g2.drawLine(cx - 3, cy + 5, cx - 3, cy - 5);
-                g2.drawArc(cx - 3, cy - 5, 8, 6, -90, 180);
-                g2.dispose();
-            }
-        };
-        logoTile.setPreferredSize(new Dimension(36, 36));
-        logoTile.setOpaque(false);
-        brandPanel.add(logoTile);
+        // Right: actions
+        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
+        right.setOpaque(false);
 
-        JPanel titles = new JPanel();
-        titles.setLayout(new BoxLayout(titles, BoxLayout.Y_AXIS));
-        titles.setOpaque(false);
-
-        JLabel mainTitle = new JLabel("Smart Parking System");
-        mainTitle.setFont(new Font("Segoe UI", Font.BOLD, 14));
-        mainTitle.setForeground(Color.WHITE);
-
-        JLabel subTitle = new JLabel("Grand Tech Park Garage • 100 Innovation Blvd");
-        subTitle.setFont(new Font("Segoe UI", Font.PLAIN, 11));
-        subTitle.setForeground(new Color(148, 163, 184));
-
-        titles.add(mainTitle);
-        titles.add(Box.createVerticalStrut(2));
-        titles.add(subTitle);
-        brandPanel.add(titles);
-        header.add(brandPanel, BorderLayout.WEST);
-
-        // Right Header Actions
-        JPanel rightPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
-        rightPanel.setOpaque(false);
-
-        // Language Toggle
-        JButton btnLang = new JButton(com.smartparking.util.I18n.isHindi() ? "हिंदी | EN" : "EN | हिंदी");
-        btnLang.setFont(com.smartparking.util.I18n.getFont(Font.BOLD, 11));
-        btnLang.setForeground(new Color(226, 232, 240));
-        btnLang.setBackground(new Color(30, 41, 59));
+        // Language toggle (ghost button)
+        JButton btnLang = new JButton(I18n.isHindi() ? "हिंदी" : "English");
+        btnLang.setFont(I18n.getFont(Font.BOLD, 12));
+        btnLang.setForeground(UITheme.TEXT_SECONDARY);
+        btnLang.setBackground(UITheme.BG_APP);
         btnLang.setFocusPainted(false);
-        btnLang.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        btnLang.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(71, 85, 105), 1, true),
-                BorderFactory.createEmptyBorder(4, 10, 4, 10)
-        ));
-        btnLang.setIcon(VectorIconUtil.getIcon(VectorIconUtil.IconType.GLOBE, 13, new Color(148, 163, 184)));
+        btnLang.setToolTipText("Switch interface language (English / हिंदी)");
+        btnLang.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        btnLang.setBorder(new EmptyBorder(6, 10, 6, 10));
+        btnLang.setIcon(VectorIconUtil.getIcon(IconType.GLOBE, 14, UITheme.TEXT_SECONDARY));
+        btnLang.setIconTextGap(6);
         btnLang.addActionListener(e -> {
-            if (com.smartparking.util.I18n.isHindi()) {
-                com.smartparking.util.I18n.setLocale(com.smartparking.util.I18n.EN);
-                btnLang.setText("EN | हिंदी");
+            if (I18n.isHindi()) {
+                I18n.setLocale(I18n.EN);
+                btnLang.setText("English");
             } else {
-                com.smartparking.util.I18n.setLocale(com.smartparking.util.I18n.HI);
-                btnLang.setText("हिंदी | EN");
+                I18n.setLocale(I18n.HI);
+                btnLang.setText("हिंदी");
             }
+            btnLang.setFont(I18n.getFont(Font.BOLD, 12));
+            NavButton active = navButtons.get(currentCard);
+            if (active != null) breadcrumbPage.setText(active.getNavText());
         });
-        rightPanel.add(btnLang);
+        right.add(wrapCenter(btnLang));
 
-        // Operational Pill
-        JPanel statusPill = new JPanel(new FlowLayout(FlowLayout.CENTER, 6, 4)) {
-            @Override
-            protected void paintComponent(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(new Color(6, 78, 59, 140));
-                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 16, 16);
-                g2.setColor(new Color(16, 185, 129, 160));
-                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 16, 16);
-                g2.dispose();
-            }
-        };
-        statusPill.setOpaque(false);
-        JLabel dot = new JLabel("●");
-        dot.setFont(new Font("Segoe UI", Font.PLAIN, 10));
-        dot.setForeground(new Color(52, 211, 153));
-        JLabel statusText = new JLabel("SYSTEM ACTIVE");
-        statusText.setFont(new Font("Segoe UI", Font.BOLD, 10));
-        statusText.setForeground(new Color(52, 211, 153));
-        statusPill.add(dot);
-        statusPill.add(statusText);
-        rightPanel.add(statusPill);
+        // Live status pill
+        right.add(wrapCenter(new StatusPill(I18n.get("nav.system_active"))));
 
-        // User Profile Tag with Role Badge
-        JPanel userTag = new JPanel(new FlowLayout(FlowLayout.CENTER, 6, 4));
-        userTag.setOpaque(false);
-        JLabel userIcon = new JLabel(VectorIconUtil.getIcon(VectorIconUtil.IconType.USER, 13, new Color(148, 163, 184)));
-        userTag.add(userIcon);
+        right.add(wrapCenter(verticalDivider()));
 
-        String displayName = (currentUser.getFullName() != null && !currentUser.getFullName().isBlank())
-                ? currentUser.getFullName() : (currentUser.getRole() == UserRole.ADMIN ? "System Administrator" : currentUser.getUsername());
-        JLabel userName = new JLabel(displayName);
-        userName.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        userName.setForeground(new Color(226, 232, 240));
-        userTag.add(userName);
+        // User chip
+        right.add(wrapCenter(buildUserChip()));
 
-        JLabel roleBadge = new JLabel(currentUser.getRole().name());
-        roleBadge.setFont(new Font("Consolas", Font.BOLD, 10));
-        if (currentUser.getRole() == UserRole.ADMIN) {
-            roleBadge.setForeground(new Color(248, 113, 113));
-            roleBadge.setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createLineBorder(new Color(153, 27, 27), 1, true),
-                    BorderFactory.createEmptyBorder(1, 4, 1, 4)
-            ));
-        } else if (currentUser.getRole() == UserRole.ATTENDANT) {
-            roleBadge.setForeground(new Color(96, 165, 250));
-            roleBadge.setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createLineBorder(new Color(30, 64, 175), 1, true),
-                    BorderFactory.createEmptyBorder(1, 4, 1, 4)
-            ));
-        } else {
-            roleBadge.setForeground(new Color(52, 211, 153));
-            roleBadge.setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createLineBorder(new Color(6, 95, 70), 1, true),
-                    BorderFactory.createEmptyBorder(1, 4, 1, 4)
-            ));
-        }
-        userTag.add(roleBadge);
-        rightPanel.add(userTag);
-
-        // Blue Sign Out Button
-        ModernButton btnSignOut = new ModernButton("Sign Out", VectorIconUtil.getIcon(VectorIconUtil.IconType.LOGOUT, 14, Color.WHITE),
-                UITheme.PRIMARY_BLUE, UITheme.PRIMARY_HOVER, Color.WHITE);
-        btnSignOut.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        btnSignOut.setPreferredSize(new Dimension(125, 34));
+        // Sign out (ghost)
+        ModernButton btnSignOut = new ModernButton(I18n.get("nav.signout"),
+                VectorIconUtil.getIcon(IconType.LOGOUT, 14, UITheme.TEXT_SECONDARY),
+                UITheme.BG_APP, UITheme.BG_ELEVATED, UITheme.TEXT_SECONDARY);
+        btnSignOut.setFont(UITheme.font(Font.BOLD, 12));
+        btnSignOut.setBorder(new EmptyBorder(7, 12, 7, 12));
+        btnSignOut.setIconTextGap(7);
+        btnSignOut.setToolTipText("Sign out of this session");
         btnSignOut.addActionListener(e -> logout());
-        rightPanel.add(btnSignOut);
+        right.add(wrapCenter(btnSignOut));
 
-        header.add(rightPanel, BorderLayout.EAST);
+        header.add(right, BorderLayout.EAST);
         return header;
     }
 
-    /**
-     * Sidebar menu dynamically constructed from Role-Based Access Control (RBAC) permissions.
-     */
+    private static JComponent wrapCenter(JComponent c) {
+        JPanel p = new JPanel(new GridBagLayout());
+        p.setOpaque(false);
+        p.add(c);
+        p.setPreferredSize(new Dimension(c.getPreferredSize().width, 56));
+        return p;
+    }
+
+    private static JComponent verticalDivider() {
+        JPanel d = new JPanel();
+        d.setBackground(UITheme.BORDER);
+        d.setPreferredSize(new Dimension(1, 22));
+        return d;
+    }
+
+    private JComponent buildUserChip() {
+        String displayName = (currentUser.getFullName() != null && !currentUser.getFullName().isBlank())
+                ? currentUser.getFullName()
+                : (currentUser.getRole() == UserRole.ADMIN ? "System Administrator" : currentUser.getUsername());
+
+        JPanel chip = new JPanel(new BorderLayout(10, 0));
+        chip.setOpaque(false);
+
+        Color roleColor = switch (currentUser.getRole()) {
+            case ADMIN -> UITheme.ACCENT;
+            case ATTENDANT -> UITheme.SLOT_EV;
+            default -> UITheme.SUCCESS;
+        };
+        chip.add(new Avatar(initials(displayName), roleColor), BorderLayout.WEST);
+
+        JPanel text = new JPanel();
+        text.setOpaque(false);
+        text.setLayout(new BoxLayout(text, BoxLayout.Y_AXIS));
+        JLabel name = new JLabel(displayName);
+        name.setFont(UITheme.font(Font.BOLD, 12));
+        name.setForeground(UITheme.TEXT_PRIMARY);
+        String roleLabel = switch (currentUser.getRole()) {
+            case ADMIN -> "Administrator";
+            case ATTENDANT -> "Gate Attendant";
+            default -> "Customer";
+        };
+        JLabel role = new JLabel(roleLabel);
+        role.setFont(UITheme.font(Font.PLAIN, 11));
+        role.setForeground(UITheme.TEXT_TERTIARY);
+        text.add(name);
+        text.add(role);
+        chip.add(text, BorderLayout.CENTER);
+        chip.setToolTipText("Signed in as " + currentUser.getUsername() + " (" + currentUser.getRole().name() + ")");
+        return chip;
+    }
+
+    private static String initials(String name) {
+        String[] parts = name.trim().split("\\s+");
+        String s = parts.length == 0 || parts[0].isEmpty() ? "?" : parts[0].substring(0, 1);
+        if (parts.length > 1 && !parts[parts.length - 1].isEmpty()) s += parts[parts.length - 1].substring(0, 1);
+        return s.toUpperCase();
+    }
+
+    // =====================================================================================
+    // Sidebar
+    // =====================================================================================
+    /** Card key -> (i18n key or literal label, icon, section). Order = sidebar order. */
+    private final Map<String, Object[]> navOrder = new LinkedHashMap<>();
+
+    {
+        navOrder.put("DASHBOARD", new Object[]{"nav.overview", IconType.DASHBOARD, "Operations"});
+        navOrder.put("FLOORS", new Object[]{"nav.floors", IconType.MAP, "Operations"});
+        navOrder.put("ENTRY", new Object[]{"nav.entry", IconType.TICKET, "Operations"});
+        navOrder.put("EXIT", new Object[]{"nav.exit", IconType.PAYMENT, "Operations"});
+        navOrder.put("RESERVATIONS", new Object[]{"nav.reservations", IconType.CALENDAR, "Operations"});
+        navOrder.put("MEMBERSHIP", new Object[]{"nav.membership", IconType.MEMBERSHIP, "Operations"});
+        navOrder.put("SEARCH", new Object[]{"nav.search", IconType.SEARCH, "Operations"});
+        navOrder.put("REPORTS", new Object[]{"nav.reports", IconType.REPORTS, "Administration"});
+        navOrder.put("AUDIT_LOG", new Object[]{"=Security Audit Trail", IconType.SHIELD, "Administration"});
+        navOrder.put("USERS", new Object[]{"=User Management", IconType.USERS, "Administration"});
+        navOrder.put("SETTINGS", new Object[]{"nav.settings", IconType.SETTINGS, "Administration"});
+        navOrder.put("MY_DATA", new Object[]{"=My Data & Privacy", IconType.USER, "Account"});
+        navOrder.put("PRIVACY", new Object[]{"=Privacy Notice (DPDP)", IconType.DOCUMENT, "Account"});
+    }
+
+    private static String label(String keyOrLiteral) {
+        return keyOrLiteral.startsWith("=") ? keyOrLiteral.substring(1) : I18n.get(keyOrLiteral);
+    }
+
     private JPanel buildSidebar() {
         sidebarPanel = new JPanel(new BorderLayout());
-        sidebarPanel.setPreferredSize(new Dimension(240, getHeight()));
-        sidebarPanel.setBackground(UITheme.SIDEBAR_BG);
-        sidebarPanel.setBorder(BorderFactory.createMatteBorder(0, 0, 0, 1, new Color(30, 41, 59)));
+        sidebarPanel.setPreferredSize(new Dimension(SIDEBAR_WIDTH, 10));
+        sidebarPanel.setBackground(UITheme.BG_APP);
+        sidebarPanel.setBorder(new MatteBorder(0, 0, 0, 1, UITheme.BORDER_SUBTLE));
 
+        // Brand
+        JPanel brand = new JPanel(new BorderLayout(12, 0));
+        brand.setOpaque(false);
+        brand.setBorder(BorderFactory.createCompoundBorder(
+                new MatteBorder(0, 0, 1, 0, UITheme.BORDER_SUBTLE),
+                new EmptyBorder(0, 18, 0, 14)));
+        brand.setPreferredSize(new Dimension(SIDEBAR_WIDTH, 56));
+        JPanel logoWrap = new JPanel(new GridBagLayout());
+        logoWrap.setOpaque(false);
+        logoWrap.add(new LogoMark(30));
+        brand.add(logoWrap, BorderLayout.WEST);
+        brandText = new JPanel(new GridBagLayout());
+        brandText.setOpaque(false);
+        JPanel bt = new JPanel();
+        bt.setOpaque(false);
+        bt.setLayout(new BoxLayout(bt, BoxLayout.Y_AXIS));
+        JLabel title = new JLabel("Smart Parking");
+        title.setFont(UITheme.font(Font.BOLD, 14));
+        title.setForeground(UITheme.TEXT_PRIMARY);
+        JLabel sub = new JLabel("Operations Console");
+        sub.setFont(UITheme.font(Font.PLAIN, 11));
+        sub.setForeground(UITheme.TEXT_TERTIARY);
+        bt.add(title);
+        bt.add(sub);
+        GridBagConstraints gc = new GridBagConstraints();
+        gc.anchor = GridBagConstraints.WEST;
+        gc.weightx = 1;
+        brandText.add(bt, gc);
+        brand.add(brandText, BorderLayout.CENTER);
+        sidebarPanel.add(brand, BorderLayout.NORTH);
+
+        // Navigation
         JPanel menuList = new JPanel();
         menuList.setLayout(new BoxLayout(menuList, BoxLayout.Y_AXIS));
         menuList.setOpaque(false);
-        menuList.setBorder(BorderFactory.createEmptyBorder(12, 10, 12, 10));
+        menuList.setBorder(new EmptyBorder(14, 12, 12, 12));
 
-        // Core Operational Links (Filtered by Role)
-        if (AccessControl.isScreenAllowed(currentUser.getRole(), "DASHBOARD")) {
-            addNavButton(menuList, "DASHBOARD", com.smartparking.util.I18n.get("nav.overview"), VectorIconUtil.IconType.DASHBOARD, new Color(255, 255, 255));
-        }
-        if (AccessControl.isScreenAllowed(currentUser.getRole(), "FLOORS")) {
-            addNavButton(menuList, "FLOORS", com.smartparking.util.I18n.get("nav.floors"), VectorIconUtil.IconType.MAP, new Color(148, 163, 184));
-        }
-        if (AccessControl.isScreenAllowed(currentUser.getRole(), "ENTRY")) {
-            addNavButton(menuList, "ENTRY", com.smartparking.util.I18n.get("nav.entry"), VectorIconUtil.IconType.TICKET, new Color(52, 211, 153));
-        }
-        if (AccessControl.isScreenAllowed(currentUser.getRole(), "EXIT")) {
-            addNavButton(menuList, "EXIT", com.smartparking.util.I18n.get("nav.exit"), VectorIconUtil.IconType.PAYMENT, new Color(248, 113, 113));
-        }
-        if (AccessControl.isScreenAllowed(currentUser.getRole(), "RESERVATIONS")) {
-            addNavButton(menuList, "RESERVATIONS", com.smartparking.util.I18n.get("nav.reservations"), VectorIconUtil.IconType.CLOCK, new Color(251, 191, 36));
-        }
-        if (AccessControl.isScreenAllowed(currentUser.getRole(), "MEMBERSHIP")) {
-            addNavButton(menuList, "MEMBERSHIP", com.smartparking.util.I18n.get("nav.membership"), VectorIconUtil.IconType.MEMBERSHIP, new Color(253, 224, 71));
-        }
-        if (AccessControl.isScreenAllowed(currentUser.getRole(), "SEARCH")) {
-            addNavButton(menuList, "SEARCH", com.smartparking.util.I18n.get("nav.search"), VectorIconUtil.IconType.SEARCH, new Color(34, 211, 238));
+        String section = null;
+        for (Map.Entry<String, Object[]> e : navOrder.entrySet()) {
+            String key = e.getKey();
+            if (!AccessControl.isScreenAllowed(currentUser.getRole(), key)) continue;
+            String sec = (String) e.getValue()[2];
+            if (!sec.equals(section)) {
+                if (section != null) menuList.add(Box.createVerticalStrut(14));
+                menuList.add(sectionLabel(sec));
+                menuList.add(Box.createVerticalStrut(4));
+                section = sec;
+            }
+            addNavButton(menuList, key, label((String) e.getValue()[0]), (IconType) e.getValue()[1]);
         }
 
-        // Divider
-        menuList.add(Box.createVerticalStrut(6));
-        JSeparator sep = new JSeparator();
-        sep.setForeground(new Color(30, 41, 59));
-        sep.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
-        menuList.add(sep);
-        menuList.add(Box.createVerticalStrut(6));
+        JScrollPane navScroll = new JScrollPane(menuList);
+        navScroll.setBorder(null);
+        navScroll.setOpaque(false);
+        navScroll.getViewport().setOpaque(false);
+        navScroll.getViewport().setBackground(UITheme.BG_APP);
+        navScroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        navScroll.getVerticalScrollBar().setUnitIncrement(16);
+        JPanel navHolder = new JPanel(new BorderLayout());
+        navHolder.setOpaque(false);
+        navHolder.add(menuList, BorderLayout.NORTH);
+        navScroll.setViewportView(navHolder);
+        sidebarPanel.add(navScroll, BorderLayout.CENTER);
 
-        // Advanced Administrative / Customer Privacy Links
-        if (AccessControl.isScreenAllowed(currentUser.getRole(), "REPORTS")) {
-            addNavButton(menuList, "REPORTS", com.smartparking.util.I18n.get("nav.reports"), VectorIconUtil.IconType.REPORTS, new Color(129, 140, 248));
-        }
-        if (AccessControl.isScreenAllowed(currentUser.getRole(), "AUDIT_LOG")) {
-            addNavButton(menuList, "AUDIT_LOG", "Security Audit Trail", VectorIconUtil.IconType.USER, new Color(56, 189, 248));
-        }
-        if (AccessControl.isScreenAllowed(currentUser.getRole(), "USERS")) {
-            addNavButton(menuList, "USERS", "User Management", VectorIconUtil.IconType.USER, new Color(167, 139, 250));
-        }
-        if (AccessControl.isScreenAllowed(currentUser.getRole(), "SETTINGS")) {
-            addNavButton(menuList, "SETTINGS", com.smartparking.util.I18n.get("nav.settings"), VectorIconUtil.IconType.SETTINGS, new Color(245, 158, 11));
-        }
-        if (AccessControl.isScreenAllowed(currentUser.getRole(), "MY_DATA")) {
-            addNavButton(menuList, "MY_DATA", "My Data & Privacy", VectorIconUtil.IconType.USER, new Color(96, 165, 250));
-        }
-        if (AccessControl.isScreenAllowed(currentUser.getRole(), "PRIVACY")) {
-            addNavButton(menuList, "PRIVACY", "Privacy Notice (DPDP)", VectorIconUtil.IconType.ALERT, new Color(244, 114, 182));
-        }
-
-        sidebarPanel.add(menuList, BorderLayout.NORTH);
-
-        // Bottom Metadata Badge
-        JPanel bottomBadge = new JPanel();
-        bottomBadge.setLayout(new BoxLayout(bottomBadge, BoxLayout.Y_AXIS));
-        bottomBadge.setBackground(new Color(11, 17, 33));
-        bottomBadge.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(1, 0, 0, 0, new Color(30, 41, 59)),
-                BorderFactory.createEmptyBorder(12, 16, 12, 16)
-        ));
-
-        JLabel capText = new JLabel(parkingLot.getTotalCapacity() + " Total Capacity");
-        capText.setFont(new Font("Segoe UI", Font.BOLD, 11));
-        capText.setForeground(new Color(203, 213, 225));
-
-        JLabel verText = new JLabel("v1.0.0 • Java 17 / SQLite");
-        verText.setFont(new Font("Consolas", Font.PLAIN, 10));
-        verText.setForeground(new Color(148, 163, 184));
-
-        bottomBadge.add(capText);
-        bottomBadge.add(Box.createVerticalStrut(2));
-        bottomBadge.add(verText);
-
-        sidebarPanel.add(bottomBadge, BorderLayout.SOUTH);
+        // Footer: live capacity
+        sidebarFooter = new JPanel();
+        sidebarFooter.setLayout(new BoxLayout(sidebarFooter, BoxLayout.Y_AXIS));
+        sidebarFooter.setOpaque(false);
+        sidebarFooter.setBorder(BorderFactory.createCompoundBorder(
+                new MatteBorder(1, 0, 0, 0, UITheme.BORDER_SUBTLE),
+                new EmptyBorder(14, 18, 16, 18)));
+        JLabel capCaption = new JLabel("FACILITY CAPACITY");
+        capCaption.setFont(UITheme.font(Font.BOLD, 10));
+        capCaption.setForeground(UITheme.TEXT_TERTIARY);
+        JLabel capText = new JLabel(parkingLot.getTotalCapacity() + " bays  ·  " + parkingLot.getFloors().size() + " levels");
+        capText.setFont(UITheme.font(Font.BOLD, 12));
+        capText.setForeground(UITheme.TEXT_BODY);
+        JLabel verText = new JLabel("v1.0.0  ·  Java 17 · SQLite");
+        verText.setFont(UITheme.font(Font.PLAIN, 11));
+        verText.setForeground(UITheme.TEXT_TERTIARY);
+        sidebarFooter.add(capCaption);
+        sidebarFooter.add(Box.createVerticalStrut(4));
+        sidebarFooter.add(capText);
+        sidebarFooter.add(Box.createVerticalStrut(2));
+        sidebarFooter.add(verText);
+        sidebarPanel.add(sidebarFooter, BorderLayout.SOUTH);
 
         // Dynamic i18n updater for sidebar items
-        com.smartparking.util.I18n.addListener(() -> {
-            updateNavLabel("DASHBOARD", "nav.overview");
-            updateNavLabel("FLOORS", "nav.floors");
-            updateNavLabel("ENTRY", "nav.entry");
-            updateNavLabel("EXIT", "nav.exit");
-            updateNavLabel("RESERVATIONS", "nav.reservations");
-            updateNavLabel("MEMBERSHIP", "nav.membership");
-            updateNavLabel("SEARCH", "nav.search");
-            updateNavLabel("REPORTS", "nav.reports");
-            updateNavLabel("SETTINGS", "nav.settings");
+        I18n.addListener(() -> {
+            for (Map.Entry<String, Object[]> e : navOrder.entrySet()) {
+                String k = (String) e.getValue()[0];
+                if (!k.startsWith("=")) updateNavLabel(e.getKey(), k);
+            }
         });
 
-        // Add component listener for responsive collapsing (<900px)
+        // Responsive collapse (<900px)
         addComponentListener(new java.awt.event.ComponentAdapter() {
             @Override
             public void componentResized(java.awt.event.ComponentEvent e) {
@@ -452,30 +495,44 @@ public class SmartParkingMainFrame extends JFrame {
         return sidebarPanel;
     }
 
+    private JComponent sectionLabel(String text) {
+        JLabel l = new JLabel(text.toUpperCase());
+        l.setFont(UITheme.font(Font.BOLD, 10));
+        l.setForeground(UITheme.TEXT_TERTIARY);
+        l.setBorder(new EmptyBorder(0, 10, 0, 0));
+        JPanel p = new JPanel(new BorderLayout());
+        p.setOpaque(false);
+        p.add(l);
+        p.setMaximumSize(new Dimension(Integer.MAX_VALUE, 20));
+        p.setAlignmentX(Component.LEFT_ALIGNMENT);
+        sectionLabels.add(p);
+        return p;
+    }
+
     private void updateNavLabel(String cardKey, String i18nKey) {
         NavButton b = navButtons.get(cardKey);
         if (b != null) {
-            b.setNavText(com.smartparking.util.I18n.get(i18nKey));
+            b.setNavText(I18n.get(i18nKey));
         }
     }
 
-    private JPanel sidebarPanel;
-    private boolean isSidebarCollapsed = false;
-
-    private void addNavButton(JPanel container, String cardKey, String text, VectorIconUtil.IconType iconType, Color iconColor) {
-        Icon icon = VectorIconUtil.getIcon(iconType, 16, iconColor);
-        NavButton btn = new NavButton(cardKey, text, icon);
+    private void addNavButton(JPanel container, String cardKey, String text, IconType iconType) {
+        NavButton btn = new NavButton(cardKey, text, iconType);
         btn.addActionListener(e -> navigateTo(cardKey));
         navButtons.put(cardKey, btn);
+        btn.setAlignmentX(Component.LEFT_ALIGNMENT);
         container.add(btn);
-        container.add(Box.createVerticalStrut(4));
+        container.add(Box.createVerticalStrut(2));
     }
 
     private void setSidebarCollapsed(boolean collapsed) {
         if (this.isSidebarCollapsed == collapsed) return;
         this.isSidebarCollapsed = collapsed;
         if (sidebarPanel != null) {
-            sidebarPanel.setPreferredSize(new Dimension(collapsed ? 68 : 240, getHeight()));
+            sidebarPanel.setPreferredSize(new Dimension(collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_WIDTH, 10));
+            brandText.setVisible(!collapsed);
+            sidebarFooter.setVisible(!collapsed);
+            for (JComponent s : sectionLabels) s.setVisible(!collapsed);
             for (NavButton btn : navButtons.values()) {
                 btn.setCollapsed(collapsed);
             }
@@ -484,6 +541,9 @@ public class SmartParkingMainFrame extends JFrame {
         }
     }
 
+    // =====================================================================================
+    // Navigation
+    // =====================================================================================
     public void navigateTo(String cardKey) {
         if (cardKey == null || cardKey.isBlank()) return;
 
@@ -494,6 +554,14 @@ public class SmartParkingMainFrame extends JFrame {
             cardLayout.show(cardsPanel, "FLOORS");
             updateSidebarStyles("FLOORS");
             floorMapPanel.highlightSlot(slotId);
+            return;
+        }
+
+        // Deep link into checkout with a ticket number / plate, e.g. "EXIT:TKT-123"
+        if (cardKey.toUpperCase().startsWith("EXIT:")) {
+            String query = cardKey.substring("EXIT:".length()).trim();
+            navigateTo("EXIT");
+            if ("EXIT".equals(currentCard)) exitPanel.prefillLookup(query);
             return;
         }
 
@@ -543,6 +611,7 @@ public class SmartParkingMainFrame extends JFrame {
             NavButton btn = entry.getValue();
             boolean isActive = entry.getKey().equalsIgnoreCase(activeCardKey);
             btn.setActive(isActive);
+            if (isActive && breadcrumbPage != null) breadcrumbPage.setText(btn.getNavText());
         }
     }
 
@@ -557,7 +626,7 @@ public class SmartParkingMainFrame extends JFrame {
 
     private void logout() {
         int confirm = JOptionPane.showConfirmDialog(this,
-                "Are you sure you want to log out of the current session?",
+                "Are you sure you want to sign out of the current session?",
                 "Confirm Sign Out",
                 JOptionPane.YES_NO_OPTION,
                 JOptionPane.QUESTION_MESSAGE);
@@ -572,71 +641,113 @@ public class SmartParkingMainFrame extends JFrame {
         }
     }
 
-    /**
-     * Custom styled navigation button matching Tailwind active/hover pill styles.
-     */
+    // =====================================================================================
+    // Shell components
+    // =====================================================================================
+
+    /** Sidebar navigation item: monochrome icon, accent indicator + tinted pill when active. */
     private static class NavButton extends JButton {
         private final String cardKey;
+        private final IconType iconType;
         private String originalText;
+        private String shortcutHint;
         private boolean isActive = false;
         private boolean isHovered = false;
         private boolean isCollapsed = false;
 
-        public NavButton(String cardKey, String text, Icon icon) {
-            super(text, icon);
+        NavButton(String cardKey, String text, IconType iconType) {
+            super(text);
             this.cardKey = cardKey;
+            this.iconType = iconType;
             this.originalText = text;
 
-            setFont(new Font("Segoe UI", Font.BOLD, 12));
-            setForeground(new Color(148, 163, 184));
+            setFont(I18n.getFont(Font.PLAIN, 13));
             setHorizontalAlignment(SwingConstants.LEFT);
             setIconTextGap(12);
             setFocusPainted(false);
             setBorderPainted(false);
             setContentAreaFilled(false);
-            setCursor(new Cursor(Cursor.HAND_CURSOR));
-            setMaximumSize(new Dimension(Integer.MAX_VALUE, 38));
-            setPreferredSize(new Dimension(216, 38));
+            setOpaque(false);
+            setBorder(new EmptyBorder(0, 12, 0, 10));
+            setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            setMaximumSize(new Dimension(Integer.MAX_VALUE, 36));
+            setPreferredSize(new Dimension(SIDEBAR_WIDTH - 24, 36));
+            applyColors();
 
             addMouseListener(new java.awt.event.MouseAdapter() {
                 @Override
                 public void mouseEntered(java.awt.event.MouseEvent e) {
                     isHovered = true;
+                    applyColors();
                     repaint();
                 }
 
                 @Override
                 public void mouseExited(java.awt.event.MouseEvent e) {
                     isHovered = false;
+                    applyColors();
+                    repaint();
+                }
+            });
+            addFocusListener(new java.awt.event.FocusAdapter() {
+                @Override
+                public void focusGained(java.awt.event.FocusEvent e) {
+                    repaint();
+                }
+
+                @Override
+                public void focusLost(java.awt.event.FocusEvent e) {
                     repaint();
                 }
             });
         }
 
-        public void setNavText(String text) {
+        String getNavText() {
+            return originalText;
+        }
+
+        void setShortcutHint(String hint) {
+            this.shortcutHint = hint;
+            setToolTipText(originalText + "  (" + hint + ")");
+        }
+
+        void setNavText(String text) {
             this.originalText = text;
+            setFont(I18n.getFont(isActive ? Font.BOLD : Font.PLAIN, 13));
             if (!isCollapsed) {
                 setText(text);
             }
+            if (shortcutHint != null) setToolTipText(text + "  (" + shortcutHint + ")");
         }
 
-        public void setActive(boolean active) {
+        void setActive(boolean active) {
             this.isActive = active;
+            setFont(I18n.getFont(active ? Font.BOLD : Font.PLAIN, 13));
+            applyColors();
             repaint();
         }
 
-        public void setCollapsed(boolean collapsed) {
+        private void applyColors() {
+            Color fg = isActive ? UITheme.TEXT_PRIMARY : (isHovered ? UITheme.TEXT_PRIMARY : UITheme.TEXT_SECONDARY);
+            Color ic = isActive ? UITheme.ACCENT_TEXT : (isHovered ? UITheme.TEXT_BODY : UITheme.TEXT_TERTIARY);
+            setForeground(fg);
+            setIcon(VectorIconUtil.getIcon(iconType, 16, ic));
+        }
+
+        void setCollapsed(boolean collapsed) {
             this.isCollapsed = collapsed;
             if (collapsed) {
                 setText("");
                 setHorizontalAlignment(SwingConstants.CENTER);
-                setPreferredSize(new Dimension(48, 38));
+                setBorder(new EmptyBorder(0, 0, 0, 0));
+                setPreferredSize(new Dimension(44, 36));
                 setToolTipText(originalText);
             } else {
                 setText(originalText);
                 setHorizontalAlignment(SwingConstants.LEFT);
-                setPreferredSize(new Dimension(216, 38));
-                setToolTipText(null);
+                setBorder(new EmptyBorder(0, 12, 0, 10));
+                setPreferredSize(new Dimension(SIDEBAR_WIDTH - 24, 36));
+                setToolTipText(shortcutHint != null ? originalText + "  (" + shortcutHint + ")" : null);
             }
             revalidate();
             repaint();
@@ -646,23 +757,124 @@ public class SmartParkingMainFrame extends JFrame {
         protected void paintComponent(Graphics g) {
             Graphics2D g2 = (Graphics2D) g.create();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-
             if (isActive) {
-                g2.setColor(new Color(30, 58, 138, 220));
-                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 8, 8);
-                g2.setColor(new Color(96, 165, 250));
-                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 8, 8);
-                setForeground(Color.WHITE);
+                g2.setColor(SIDEBAR_ACTIVE);
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), UITheme.RADIUS, UITheme.RADIUS);
+                g2.setColor(UITheme.ACCENT);
+                g2.fillRoundRect(0, 9, 3, getHeight() - 18, 3, 3);
             } else if (isHovered) {
-                g2.setColor(new Color(30, 41, 59, 180));
-                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 8, 8);
-                setForeground(new Color(241, 245, 249));
-            } else {
-                setForeground(new Color(148, 163, 184));
+                g2.setColor(SIDEBAR_HOVER);
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), UITheme.RADIUS, UITheme.RADIUS);
             }
-
+            if (isFocusOwner() && com.smartparking.ui.theme.DarkTheme.isFocusVisible()) {
+                g2.setColor(UITheme.alpha(UITheme.ACCENT, 150));
+                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, UITheme.RADIUS, UITheme.RADIUS);
+            }
             g2.dispose();
             super.paintComponent(g);
+        }
+    }
+
+    /** Brand mark: rounded indigo tile with a geometric "P". */
+    static class LogoMark extends JComponent {
+        private final int size;
+
+        LogoMark(int size) {
+            this.size = size;
+            setPreferredSize(new Dimension(size, size));
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
+            float s = size;
+            g2.setPaint(new GradientPaint(0, 0, UITheme.ACCENT_HOVER, s, s, UITheme.ACCENT_PRESSED));
+            g2.fill(new java.awt.geom.RoundRectangle2D.Float(0, 0, s, s, s * 0.32f, s * 0.32f));
+            g2.setColor(Color.WHITE);
+            g2.setStroke(new BasicStroke(s * 0.11f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            java.awt.geom.Path2D.Float p = new java.awt.geom.Path2D.Float();
+            p.moveTo(s * 0.36f, s * 0.76f);
+            p.lineTo(s * 0.36f, s * 0.26f);
+            p.lineTo(s * 0.55f, s * 0.26f);
+            p.curveTo(s * 0.73f, s * 0.26f, s * 0.73f, s * 0.54f, s * 0.55f, s * 0.54f);
+            p.lineTo(s * 0.36f, s * 0.54f);
+            g2.draw(p);
+            g2.dispose();
+        }
+    }
+
+    /** Initials avatar tinted with the role colour. */
+    private static class Avatar extends JComponent {
+        private final String text;
+        private final Color color;
+
+        Avatar(String text, Color color) {
+            this.text = text;
+            this.color = color;
+            setPreferredSize(new Dimension(30, 30));
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            g2.setColor(UITheme.blend(color, UITheme.BG_APP, 0.22));
+            g2.fillOval(0, 0, 30, 30);
+            g2.setColor(UITheme.blend(color, UITheme.BG_APP, 0.5));
+            g2.drawOval(0, 0, 29, 29);
+            g2.setFont(UITheme.font(Font.BOLD, 11));
+            g2.setColor(UITheme.blend(color, Color.WHITE, 0.35));
+            FontMetrics fm = g2.getFontMetrics();
+            g2.drawString(text, (30 - fm.stringWidth(text)) / 2f, 15 + (fm.getAscent() - fm.getDescent()) / 2f);
+            g2.dispose();
+        }
+    }
+
+    /** "System active" pill with a softly pulsing dot. */
+    private static class StatusPill extends JComponent {
+        private final String text;
+        private float phase = 0f;
+
+        StatusPill(String text) {
+            this.text = text;
+            setFont(UITheme.font(Font.BOLD, 11));
+            FontMetrics fm = getFontMetrics(getFont());
+            setPreferredSize(new Dimension(fm.stringWidth(text) + 34, 24));
+            setToolTipText("Database connected · services running");
+            javax.swing.Timer t = new javax.swing.Timer(80, e -> {
+                phase = (phase + 0.06f) % 1f;
+                repaint();
+            });
+            addHierarchyListener(e -> {
+                if (isShowing()) t.start();
+                else t.stop();
+            });
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            int w = getWidth(), h = getHeight();
+            g2.setColor(UITheme.blend(UITheme.SUCCESS, UITheme.BG_APP, 0.10));
+            g2.fillRoundRect(0, 0, w, h, h, h);
+            g2.setColor(UITheme.blend(UITheme.SUCCESS, UITheme.BG_APP, 0.30));
+            g2.drawRoundRect(0, 0, w - 1, h - 1, h, h);
+            int cx = 13, cy = h / 2;
+            float pulse = (float) (0.5 + 0.5 * Math.sin(phase * Math.PI * 2));
+            g2.setColor(UITheme.alpha(UITheme.SUCCESS, (int) (40 + 50 * pulse)));
+            int r = (int) (5 + 2 * pulse);
+            g2.fillOval(cx - r, cy - r, r * 2, r * 2);
+            g2.setColor(UITheme.SUCCESS_TEXT);
+            g2.fillOval(cx - 3, cy - 3, 6, 6);
+            g2.setFont(getFont());
+            FontMetrics fm = g2.getFontMetrics();
+            g2.drawString(text, 24, cy + (fm.getAscent() - fm.getDescent()) / 2f);
+            g2.dispose();
         }
     }
 }
