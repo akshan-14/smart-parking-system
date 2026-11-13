@@ -58,6 +58,9 @@ public class SmartParkingMainFrame extends JFrame {
     private FloorMapPanel floorMapPanel;
     private VehicleEntryPanel entryPanel;
     private VehicleExitPanel exitPanel;
+    private AlertsPanel alertsPanel;
+    private final com.smartparking.service.AlertService alertService = new com.smartparking.service.AlertService();
+    private java.util.concurrent.ScheduledExecutorService anomalyScheduler;
     private ReservationPanel reservationPanel;
     private MembershipPanel membershipPanel;
     private VehicleSearchPanel searchPanel;
@@ -95,6 +98,37 @@ public class SmartParkingMainFrame extends JFrame {
 
         initUI();
         initSessionTracking();
+        startAnomalyScheduler();
+    }
+
+    /**
+     * AlertService.runScheduledAnomalyCheck() existed but nothing scheduled it, so the Alerts screen stayed
+     * empty until someone pressed "Run anomaly scan". Run it in the background at sign-in and every 5 minutes
+     * for operational roles.
+     */
+    private void startAnomalyScheduler() {
+        if (currentUser == null || !AccessControl.isScreenAllowed(currentUser.getRole(), "ALERTS")) return;
+        anomalyScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "anomaly-scan");
+            t.setDaemon(true);
+            return t;
+        });
+        anomalyScheduler.scheduleAtFixedRate(() -> {
+            try {
+                alertService.runScheduledAnomalyCheck();
+                SwingUtilities.invokeLater(() -> {
+                    if ("ALERTS".equals(currentCard)) alertsPanel.refreshAlerts();
+                });
+            } catch (Exception e) {
+                System.err.println("[ANOMALY-SCAN] " + e.getMessage());
+            }
+        }, 0, 5, java.util.concurrent.TimeUnit.MINUTES);
+    }
+
+    @Override
+    public void dispose() {
+        if (anomalyScheduler != null) anomalyScheduler.shutdownNow();
+        super.dispose();
     }
 
     private void initUI() {
@@ -131,6 +165,7 @@ public class SmartParkingMainFrame extends JFrame {
         reservationPanel = new ReservationPanel(reservationService, onStateChange);
         membershipPanel = new MembershipPanel(membershipService);
         searchPanel = new VehicleSearchPanel(parkingService, this::navigateTo);
+        alertsPanel = new AlertsPanel(alertService, this::navigateTo);
         reportsPanel = new AdminReportsPanel(parkingLot, onStateChange);
         auditLogPanel = new AuditLogViewerPanel();
         userManagementPanel = new UserManagementPanel();
@@ -145,6 +180,7 @@ public class SmartParkingMainFrame extends JFrame {
         cardsPanel.add(reservationPanel, "RESERVATIONS");
         cardsPanel.add(membershipPanel, "MEMBERSHIP");
         cardsPanel.add(searchPanel, "SEARCH");
+        cardsPanel.add(alertsPanel, "ALERTS");
         cardsPanel.add(reportsPanel, "REPORTS");
         cardsPanel.add(auditLogPanel, "AUDIT_LOG");
         cardsPanel.add(userManagementPanel, "USERS");
@@ -351,7 +387,10 @@ public class SmartParkingMainFrame extends JFrame {
     }
 
     private static String initials(String name) {
-        String[] parts = name.trim().split("\\s+");
+        // Ignore bracketed / non-letter words, e.g. "Ramesh Kumar (Attendant)" -> "RK" (was "R(")
+        String[] parts = java.util.Arrays.stream(name.replaceAll("\\(.*?\\)", " ").trim().split("\\s+"))
+                .filter(w -> !w.isEmpty() && Character.isLetter(w.charAt(0))).toArray(String[]::new);
+        if (parts.length == 0) return "?";
         String s = parts.length == 0 || parts[0].isEmpty() ? "?" : parts[0].substring(0, 1);
         if (parts.length > 1 && !parts[parts.length - 1].isEmpty()) s += parts[parts.length - 1].substring(0, 1);
         return s.toUpperCase();
@@ -371,6 +410,7 @@ public class SmartParkingMainFrame extends JFrame {
         navOrder.put("RESERVATIONS", new Object[]{"nav.reservations", IconType.CALENDAR, "Operations"});
         navOrder.put("MEMBERSHIP", new Object[]{"nav.membership", IconType.MEMBERSHIP, "Operations"});
         navOrder.put("SEARCH", new Object[]{"nav.search", IconType.SEARCH, "Operations"});
+        navOrder.put("ALERTS", new Object[]{"=Alerts", IconType.BELL, "Operations"});
         navOrder.put("REPORTS", new Object[]{"nav.reports", IconType.REPORTS, "Administration"});
         navOrder.put("AUDIT_LOG", new Object[]{"=Security Audit Trail", IconType.SHIELD, "Administration"});
         navOrder.put("USERS", new Object[]{"=User Management", IconType.USERS, "Administration"});
@@ -583,6 +623,7 @@ public class SmartParkingMainFrame extends JFrame {
             case "DASHBOARD" -> dashboardPanel.refreshData();
             case "FLOORS" -> floorMapPanel.renderFloorGrid();
             case "RESERVATIONS" -> reservationPanel.refreshTable();
+            case "ALERTS" -> alertsPanel.refreshAlerts();
             case "REPORTS" -> {
                 if (reportsPanel != null) {
                     reportsPanel.refreshReport();

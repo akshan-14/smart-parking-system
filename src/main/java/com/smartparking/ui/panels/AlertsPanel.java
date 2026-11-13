@@ -6,7 +6,10 @@ import com.smartparking.model.user.User;
 import com.smartparking.security.AccessControl;
 import com.smartparking.security.UserSession;
 import com.smartparking.service.AlertService;
+import com.smartparking.ui.components.ModernButton;
+import com.smartparking.ui.components.Toast;
 import com.smartparking.ui.theme.UITheme;
+import com.smartparking.ui.util.VectorIconUtil;
 import com.smartparking.util.DateFormat;
 import com.smartparking.util.I18n;
 
@@ -50,141 +53,123 @@ public class AlertsPanel extends JPanel {
         this(new AlertService(), key -> {});
     }
 
+    private CardLayout tableCards;
+    private JPanel tableHolder;
+    private ModernButton btnViewBay;
+    private ModernButton btnAck;
+    private ModernButton btnResolve;
+
     private void initUI() {
-        // --- 1. Header Bar ---
-        JPanel header = new JPanel(new BorderLayout());
-        header.setOpaque(false);
-
-        JPanel left = new JPanel();
-        left.setLayout(new BoxLayout(left, BoxLayout.Y_AXIS));
-        left.setOpaque(false);
-
-        JLabel title = new JLabel(I18n.get("nav.alerts"));
-        title.setFont(UITheme.font(Font.BOLD, 22));
-        title.setForeground(UITheme.TEXT_DARK);
-
-        JLabel sub = new JLabel("Live Facility Anomaly Detection, Bay Issues, Hardware Faults & Overstay Tracking");
-        sub.setFont(UITheme.font(Font.PLAIN, 12));
-        sub.setForeground(UITheme.TEXT_MUTED);
-
-        left.add(title);
-        left.add(Box.createVerticalStrut(4));
-        left.add(sub);
-        header.add(left, BorderLayout.WEST);
-
-        // Header Actions: Scan Anomaly Now + Open Count Badge
-        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
-        right.setOpaque(false);
-
-        countBadge = new JLabel("0 Open Alerts");
+        // --- Header ---
+        com.smartparking.ui.components.PageHeader header = new com.smartparking.ui.components.PageHeader(
+                "Operational alerts", "Overstays, bay issues and charger faults detected across the garage");
+        countBadge = new JLabel("0 open");
         countBadge.setFont(UITheme.font(Font.BOLD, 12));
-        countBadge.setForeground(new Color(232, 114, 114));
-        countBadge.setBackground(UITheme.BG_HOVER);
-        countBadge.setOpaque(true);
-        countBadge.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(121, 30, 36), 1, true),
-                BorderFactory.createEmptyBorder(4, 10, 4, 10)
-        ));
-
-        JButton btnScan = new JButton("Run Anomaly Scan");
-        btnScan.setFont(UITheme.font(Font.BOLD, 12));
-        btnScan.setBackground(UITheme.ACCENT);
-        btnScan.setForeground(Color.WHITE);
-        btnScan.setFocusPainted(false);
-        btnScan.setCursor(new Cursor(Cursor.HAND_CURSOR));
+        countBadge.setForeground(UITheme.TEXT_SECONDARY);
+        ModernButton btnScan = ModernButton.createSecondary("Run anomaly scan",
+                VectorIconUtil.getIcon(VectorIconUtil.IconType.REFRESH, 14, UITheme.TEXT_SECONDARY));
+        btnScan.setToolTipText("Check every bay, ticket and charger now (also runs automatically)");
         btnScan.addActionListener(e -> {
             alertService.runScheduledAnomalyCheck();
             refreshAlerts();
-            JOptionPane.showMessageDialog(this, "Anomaly check completed across all garage bays, tickets, and chargers.",
-                    "Scan Completed", JOptionPane.INFORMATION_MESSAGE);
+            Toast.success(this, "Anomaly scan complete", alertService.getOpenAlertCount() + " open alert(s)");
         });
+        header.addAction(countBadge);
+        header.addAction(btnScan);
 
-        right.add(countBadge);
-        right.add(btnScan);
-        header.add(right, BorderLayout.EAST);
-        add(header, BorderLayout.NORTH);
-
-        // --- 2. Filter Bar ---
-        JPanel filterCard = new JPanel(new FlowLayout(FlowLayout.LEFT, 14, 8));
-        filterCard.setBackground(UITheme.BG_CARD);
-        filterCard.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(UITheme.BORDER_SUBTLE, 1, true),
-                BorderFactory.createEmptyBorder(6, 12, 6, 12)
-        ));
-
-        filterCard.add(new JLabel("Severity:"));
+        // --- Filter + actions bar ---
+        JPanel bar = new JPanel(new BorderLayout());
+        bar.setOpaque(false);
+        bar.setBorder(BorderFactory.createEmptyBorder(0, 0, 12, 0));
+        JPanel filters = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        filters.setOpaque(false);
+        filters.add(filterLabel("Severity"));
         comboSeverity = new JComboBox<>(new String[]{"ALL", "CRITICAL", "WARNING", "INFO"});
+        UITheme.styleComboBox(comboSeverity);
         comboSeverity.addActionListener(e -> refreshAlerts());
-        filterCard.add(comboSeverity);
-
-        filterCard.add(Box.createHorizontalStrut(10));
-        filterCard.add(new JLabel("Status:"));
+        filters.add(comboSeverity);
+        filters.add(Box.createHorizontalStrut(6));
+        filters.add(filterLabel("Status"));
         comboStatus = new JComboBox<>(new String[]{"OPEN", "ACKNOWLEDGED", "RESOLVED", "ALL"});
+        UITheme.styleComboBox(comboStatus);
         comboStatus.addActionListener(e -> refreshAlerts());
-        filterCard.add(comboStatus);
+        filters.add(comboStatus);
+        bar.add(filters, BorderLayout.WEST);
 
-        JButton btnRefresh = new JButton("Refresh");
-        btnRefresh.setFont(UITheme.font(Font.PLAIN, 12));
-        btnRefresh.addActionListener(e -> refreshAlerts());
-        filterCard.add(btnRefresh);
+        JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        actions.setOpaque(false);
+        btnViewBay = ModernButton.createSecondary("Show on floor map",
+                VectorIconUtil.getIcon(VectorIconUtil.IconType.MAP, 13, UITheme.TEXT_SECONDARY)).compact();
+        btnViewBay.addActionListener(e -> onShowOnFloorMap());
+        btnAck = ModernButton.createSecondary("Acknowledge", null).compact();
+        btnAck.addActionListener(e -> onAcknowledge());
+        btnResolve = new ModernButton("Resolve…", VectorIconUtil.getIcon(VectorIconUtil.IconType.CHECK, 13, Color.WHITE)).compact();
+        btnResolve.addActionListener(e -> onResolve());
+        actions.add(btnViewBay);
+        actions.add(btnAck);
+        actions.add(btnResolve);
+        bar.add(actions, BorderLayout.EAST);
 
-        // --- 3. Table of Alerts ---
+        JPanel top = new JPanel(new BorderLayout());
+        top.setOpaque(false);
+        top.add(header, BorderLayout.NORTH);
+        top.add(bar, BorderLayout.SOUTH);
+        add(top, BorderLayout.NORTH);
+
+        // --- Table ---
         String[] cols = {"ID", "Severity", "Type", "Entity", "Message", "Created (IST)", "Status", "Resolution"};
         tableModel = new DefaultTableModel(cols, 0) {
             @Override
             public boolean isCellEditable(int row, int col) { return false; }
         };
-
         alertsTable = new JTable(tableModel);
-        alertsTable.setRowHeight(32);
-        alertsTable.setFont(UITheme.font(Font.PLAIN, 12));
-        alertsTable.getTableHeader().setFont(UITheme.font(Font.BOLD, 12));
-        alertsTable.getColumnModel().getColumn(1).setCellRenderer(new SeverityRenderer());
-        alertsTable.getColumnModel().getColumn(6).setCellRenderer(new StatusRenderer());
+        alertsTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        alertsTable.getColumnModel().getColumn(1).setCellRenderer(new PillRenderer());
+        alertsTable.getColumnModel().getColumn(6).setCellRenderer(new PillRenderer());
+        alertsTable.getSelectionModel().addListSelectionListener(e -> updateActionState());
+        alertsTable.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(java.awt.event.MouseEvent e) {
+                if (e.getClickCount() == 2 && alertsTable.getSelectedRow() >= 0) onShowOnFloorMap();
+            }
+        });
 
         JScrollPane scrollPane = new JScrollPane(alertsTable);
-        scrollPane.setBorder(BorderFactory.createLineBorder(UITheme.BORDER_SUBTLE, 1, true));
+        scrollPane.setBorder(new com.smartparking.ui.theme.DarkTheme.RoundBorder(UITheme.BORDER_SUBTLE, UITheme.RADIUS));
         scrollPane.getViewport().setBackground(UITheme.BG_CARD);
 
-        // --- 4. Action Buttons Footer ---
-        JPanel footer = new JPanel(new FlowLayout(FlowLayout.RIGHT, 12, 8));
-        footer.setOpaque(false);
+        tableCards = new CardLayout();
+        tableHolder = new JPanel(tableCards);
+        tableHolder.setOpaque(false);
+        tableHolder.add(scrollPane, "TABLE");
+        com.smartparking.ui.components.RoundedPanel emptyCard = new com.smartparking.ui.components.RoundedPanel(
+                UITheme.RADIUS_LG, UITheme.BG_CARD, UITheme.BORDER_SUBTLE);
+        emptyCard.setLayout(new BorderLayout());
+        emptyCard.add(new com.smartparking.ui.components.EmptyState(VectorIconUtil.IconType.BELL,
+                "No alerts match these filters", "Change the severity or status filter, or run an anomaly scan."), BorderLayout.CENTER);
+        tableHolder.add(emptyCard, "EMPTY");
+        add(tableHolder, BorderLayout.CENTER);
+        updateActionState();
+    }
 
-        JButton btnViewBay = new JButton("Show on Floor Map \u2192");
-        btnViewBay.setFont(UITheme.font(Font.BOLD, 12));
-        btnViewBay.setBackground(UITheme.BG_ELEVATED);
-        btnViewBay.setForeground(Color.WHITE);
-        btnViewBay.setFocusPainted(false);
-        btnViewBay.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        btnViewBay.addActionListener(e -> onShowOnFloorMap());
+    private static JLabel filterLabel(String t) {
+        JLabel l = new JLabel(t);
+        l.setFont(UITheme.font(Font.PLAIN, 12));
+        l.setForeground(UITheme.TEXT_SECONDARY);
+        return l;
+    }
 
-        JButton btnAck = new JButton("Acknowledge");
-        btnAck.setFont(UITheme.font(Font.BOLD, 12));
-        btnAck.setBackground(new Color(245, 158, 11));
-        btnAck.setForeground(Color.WHITE);
-        btnAck.setFocusPainted(false);
-        btnAck.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        btnAck.addActionListener(e -> onAcknowledge());
+    private Alert selectedAlert() {
+        int row = alertsTable.getSelectedRow();
+        if (row < 0 || currentAlerts == null || row >= currentAlerts.size()) return null;
+        return currentAlerts.get(alertsTable.convertRowIndexToModel(row));
+    }
 
-        JButton btnResolve = new JButton("Resolve Alert");
-        btnResolve.setFont(UITheme.font(Font.BOLD, 12));
-        btnResolve.setBackground(new Color(16, 185, 129));
-        btnResolve.setForeground(Color.WHITE);
-        btnResolve.setFocusPainted(false);
-        btnResolve.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        btnResolve.addActionListener(e -> onResolve());
-
-        footer.add(btnViewBay);
-        footer.add(btnAck);
-        footer.add(btnResolve);
-
-        JPanel centerPanel = new JPanel(new BorderLayout(0, 10));
-        centerPanel.setOpaque(false);
-        centerPanel.add(filterCard, BorderLayout.NORTH);
-        centerPanel.add(scrollPane, BorderLayout.CENTER);
-        centerPanel.add(footer, BorderLayout.SOUTH);
-
-        add(centerPanel, BorderLayout.CENTER);
+    private void updateActionState() {
+        Alert a = selectedAlert();
+        btnViewBay.setEnabled(a != null);
+        btnAck.setEnabled(a != null && a.isOpen());
+        btnResolve.setEnabled(a != null && !a.isResolved());
     }
 
     public void refreshAlerts() {
@@ -210,32 +195,43 @@ public class AlertsPanel extends JPanel {
         }
 
         int openCount = alertService.getOpenAlertCount();
-        countBadge.setText(openCount + " Open Alert" + (openCount == 1 ? "" : "s"));
+        countBadge.setText(openCount + " open");
+        countBadge.setForeground(openCount > 0 ? UITheme.ERROR_TEXT : UITheme.TEXT_SECONDARY);
+        tableCards.show(tableHolder, currentAlerts.isEmpty() ? "EMPTY" : "TABLE");
+        updateActionState();
     }
 
     private void onShowOnFloorMap() {
-        int row = alertsTable.getSelectedRow();
-        if (row < 0 || row >= currentAlerts.size()) {
-            JOptionPane.showMessageDialog(this, "Please select an alert row first.", "Selection Required", JOptionPane.WARNING_MESSAGE);
+        Alert selected = selectedAlert();
+        if (selected == null) {
+            Toast.info(this, "Select an alert first", null);
             return;
         }
-        Alert selected = currentAlerts.get(row);
         if ("SLOT".equalsIgnoreCase(selected.getEntityType())) {
             navigationHandler.accept("FLOORS:" + selected.getEntityId());
+        } else if ("TICKET".equalsIgnoreCase(selected.getEntityType())) {
+            // Overstay alerts reference the ticket: jump to the bay the vehicle occupies
+            String bay = null;
+            try {
+                bay = new com.smartparking.repository.TicketDao().findById(Integer.parseInt(selected.getEntityId()))
+                        .map(com.smartparking.model.ticket.ParkingTicket::getSlotId).orElse(null);
+            } catch (Exception ignored) {
+                // non-numeric id or ticket removed: fall back to the map
+            }
+            navigationHandler.accept(bay != null ? "FLOORS:" + bay : "FLOORS");
         } else {
             navigationHandler.accept("FLOORS");
         }
     }
 
     private void onAcknowledge() {
-        int row = alertsTable.getSelectedRow();
-        if (row < 0 || row >= currentAlerts.size()) {
-            JOptionPane.showMessageDialog(this, "Please select an open alert row to acknowledge.", "Selection Required", JOptionPane.WARNING_MESSAGE);
+        Alert selected = selectedAlert();
+        if (selected == null) {
+            Toast.info(this, "Select an open alert to acknowledge", null);
             return;
         }
-        Alert selected = currentAlerts.get(row);
         if (!selected.isOpen()) {
-            JOptionPane.showMessageDialog(this, "Alert is already " + selected.getStatus(), "Notice", JOptionPane.INFORMATION_MESSAGE);
+            Toast.info(this, "Alert #" + selected.getId() + " is already " + String.valueOf(selected.getStatus()).toLowerCase(), null);
             return;
         }
 
@@ -243,26 +239,28 @@ public class AlertsPanel extends JPanel {
         try {
             alertService.acknowledgeAlert(selected.getId(), user);
             refreshAlerts();
-            JOptionPane.showMessageDialog(this, "Alert #" + selected.getId() + " acknowledged.", "Success", JOptionPane.INFORMATION_MESSAGE);
+            Toast.success(this, "Alert #" + selected.getId() + " acknowledged", null);
         } catch (Exception ex) {
-            JOptionPane.showMessageDialog(this, ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+            Toast.error(this, "Couldn't acknowledge alert", ex.getMessage());
         }
     }
 
     private void onResolve() {
-        int row = alertsTable.getSelectedRow();
-        if (row < 0 || row >= currentAlerts.size()) {
-            JOptionPane.showMessageDialog(this, "Please select an alert row to resolve.", "Selection Required", JOptionPane.WARNING_MESSAGE);
+        Alert selected = selectedAlert();
+        if (selected == null) {
+            Toast.info(this, "Select an alert to resolve", null);
             return;
         }
-        Alert selected = currentAlerts.get(row);
         if (selected.isResolved()) {
-            JOptionPane.showMessageDialog(this, "Alert is already resolved.", "Notice", JOptionPane.INFORMATION_MESSAGE);
+            Toast.info(this, "Alert #" + selected.getId() + " is already resolved", null);
             return;
         }
 
-        String note = JOptionPane.showInputDialog(this, "Enter resolution explanation note:", "Resolve Alert #" + selected.getId(), JOptionPane.PLAIN_MESSAGE);
-        if (note == null || note.trim().isEmpty()) {
+        String note = (String) JOptionPane.showInputDialog(this, "How was it resolved? (recorded with the alert)",
+                "Resolve alert #" + selected.getId(), JOptionPane.PLAIN_MESSAGE, null, null, "");
+        if (note == null) return;
+        if (note.trim().isEmpty()) {
+            Toast.error(this, "Alert not resolved", "A resolution note is required.");
             return;
         }
 
@@ -270,52 +268,48 @@ public class AlertsPanel extends JPanel {
         try {
             alertService.resolveAlert(selected.getId(), user, note.trim());
             refreshAlerts();
-            JOptionPane.showMessageDialog(this, "Alert #" + selected.getId() + " marked RESOLVED.", "Success", JOptionPane.INFORMATION_MESSAGE);
+            Toast.success(this, "Alert #" + selected.getId() + " resolved", note.trim());
         } catch (Exception ex) {
-            JOptionPane.showMessageDialog(this, ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+            Toast.error(this, "Couldn't resolve alert", ex.getMessage());
         }
     }
 
-    // Custom cell renderers for high-contrast pills
-    private static class SeverityRenderer extends DefaultTableCellRenderer {
-        @Override
-        public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) {
-            JLabel lbl = (JLabel) super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
-            lbl.setHorizontalAlignment(SwingConstants.CENTER);
-            String sev = String.valueOf(value);
-            if ("CRITICAL".equalsIgnoreCase(sev)) {
-                lbl.setBackground(UITheme.BG_HOVER);
-                lbl.setForeground(new Color(242, 136, 136));
-            } else if ("WARNING".equalsIgnoreCase(sev)) {
-                lbl.setBackground(new Color(52, 51, 35));
-                lbl.setForeground(new Color(250, 174, 127));
-            } else {
-                lbl.setBackground(UITheme.BG_HOVER);
-                lbl.setForeground(new Color(134, 129, 218));
-            }
-            lbl.setOpaque(true);
-            return lbl;
-        }
-    }
+    /** Severity / status pills using the shared badge painter (dark-theme safe colours). */
+    private static class PillRenderer extends com.smartparking.ui.components.Badge.Renderer {
+        private Object value;
+        private boolean selected;
+        private int row;
+        private JTable table;
 
-    private static class StatusRenderer extends DefaultTableCellRenderer {
         @Override
         public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) {
-            JLabel lbl = (JLabel) super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
-            lbl.setHorizontalAlignment(SwingConstants.CENTER);
-            String st = String.valueOf(value);
-            if ("OPEN".equalsIgnoreCase(st)) {
-                lbl.setBackground(UITheme.BG_HOVER);
-                lbl.setForeground(new Color(234, 113, 113));
-            } else if ("ACKNOWLEDGED".equalsIgnoreCase(st)) {
-                lbl.setBackground(new Color(254, 240, 138));
-                lbl.setForeground(new Color(249, 192, 128));
-            } else {
-                lbl.setBackground(UITheme.BG_ELEVATED);
-                lbl.setForeground(new Color(139, 238, 177));
+            this.value = value;
+            this.selected = isSelected;
+            this.row = row;
+            this.table = table;
+            setText("");
+            return this;
+        }
+
+        private static Color colorOf(String v) {
+            switch (v) {
+                case "CRITICAL": case "OPEN": return UITheme.ERROR;
+                case "WARNING": case "ACKNOWLEDGED": return UITheme.WARNING;
+                case "RESOLVED": return UITheme.SUCCESS;
+                default: return UITheme.ACCENT;
             }
-            lbl.setOpaque(true);
-            return lbl;
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            Object hr = table.getClientProperty("hoverRow");
+            boolean hover = hr instanceof Integer && (Integer) hr == row;
+            g.setColor(selected ? UITheme.BG_SELECTED : hover ? UITheme.BG_HOVER : (row % 2 == 0 ? UITheme.BG_CARD : UITheme.BG_SURFACE));
+            g.fillRect(0, 0, getWidth(), getHeight());
+            String s = value == null ? "" : value.toString().toUpperCase();
+            Font f = UITheme.font(Font.BOLD, 11);
+            int w = g.getFontMetrics(f).stringWidth(s) + 26;
+            com.smartparking.ui.components.Badge.paintBadge((Graphics2D) g, s, colorOf(s), true, f, 8, (getHeight() - 22) / 2, Math.min(w, getWidth() - 12));
         }
     }
 }

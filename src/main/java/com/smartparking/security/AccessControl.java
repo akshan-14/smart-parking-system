@@ -24,7 +24,7 @@ public final class AccessControl {
 
         Set<String> adminScreens = new LinkedHashSet<>(Arrays.asList(
                 "DASHBOARD", "FLOORS", "ENTRY", "EXIT", "RESERVATIONS", "MEMBERSHIP",
-                "SEARCH", "REPORTS", "AUDIT_LOG", "USERS", "SETTINGS", "PRIVACY"
+                "SEARCH", "ALERTS", "REPORTS", "AUDIT_LOG", "USERS", "SETTINGS", "PRIVACY"
         ));
         ROLE_SCREENS.put(UserRole.ADMIN, Collections.unmodifiableSet(adminScreens));
 
@@ -44,7 +44,7 @@ public final class AccessControl {
         ROLE_PERMISSIONS.put(UserRole.ATTENDANT, Collections.unmodifiableSet(attendantPerms));
 
         Set<String> attendantScreens = new LinkedHashSet<>(Arrays.asList(
-                "DASHBOARD", "FLOORS", "ENTRY", "EXIT", "RESERVATIONS", "SEARCH", "PRIVACY"
+                "DASHBOARD", "FLOORS", "ENTRY", "EXIT", "RESERVATIONS", "SEARCH", "ALERTS", "PRIVACY"
         ));
         ROLE_SCREENS.put(UserRole.ATTENDANT, Collections.unmodifiableSet(attendantScreens));
 
