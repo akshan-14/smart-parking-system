@@ -258,6 +258,32 @@ public class DatabaseInitializer {
         }
     }
 
+    /** A default account created on a fresh installation. */
+    private static final class DemoAccount {
+        final String username, password, fullName, email, phone, role, shiftOrPlate;
+        final boolean forcePasswordChange;
+        DemoAccount(String username, String password, String fullName, String email, String phone,
+                    String role, String shiftOrPlate, boolean forcePasswordChange) {
+            this.username = username; this.password = password; this.fullName = fullName; this.email = email;
+            this.phone = phone; this.role = role; this.shiftOrPlate = shiftOrPlate;
+            this.forcePasswordChange = forcePasswordChange;
+        }
+    }
+
+    private static final List<DemoAccount> DEMO_ACCOUNTS = List.of(
+            // admin / Admin@123, forced to change the password on first login
+            new DemoAccount("admin", "Admin@123", "System Administrator", "admin@smartparking.up.gov.in",
+                    "9876501001", "ADMIN", null, true),
+            new DemoAccount("attendant1", "Attendant@123", "Ramesh Kumar (Attendant)", "ramesh@smartparking.up.gov.in",
+                    "9876501002", "ATTENDANT", "Morning Shift (Lucknow Control)", false),
+            new DemoAccount("customer1", "Customer@123", "Priya Sharma", "priya.sharma@example.com",
+                    "9876501003", "CUSTOMER", "UP32AB1234", false));
+
+    /**
+     * Creates the default demo accounts on a fresh installation (no users at all). On an existing installation this
+     * does nothing: it never resets a password, phone, force-password-change flag or any other account field, and
+     * it never recreates a demo account an administrator removed, which would reintroduce a publicly known password.
+     */
     private static void seedUsers(Connection conn) throws Exception {
         // 1. Read, then close the cursor before writing. Keeping a SELECT open while writing holds a stale WAL
         //    read snapshot; if any other connection commits meanwhile, SQLite rejects the write with
@@ -267,80 +293,37 @@ public class DatabaseInitializer {
              ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM users;")) {
             existingUsers = rs.next() ? rs.getInt(1) : 0;
         }
+        if (existingUsers > 0) return; // existing installation: leave every user exactly as it is
+        List<DemoAccount> accounts = DEMO_ACCOUNTS;
 
         // 2. Do the slow BCrypt hashing (cost 12) before touching the database, not inside the transaction.
-        String adminHash = PasswordUtils.hashPassword("Admin@123");
-        String attendantHash = PasswordUtils.hashPassword("Attendant@123");
-        String customerHash = PasswordUtils.hashPassword("Customer@123");
+        List<String> hashes = new ArrayList<>();
+        for (DemoAccount a : accounts) hashes.add(PasswordUtils.hashPassword(a.password));
 
-        // 3. Apply all user writes in one short transaction.
+        // 3. Create the accounts in one short transaction. The NOT EXISTS guard keeps this create-only even if another
+        //    process (e.g. a second app instance starting at the same time) created the same username meanwhile.
+        String insertUserSql = "INSERT INTO users (username, password_hash, salt, full_name, email, phone, role, shift_or_plate, active, failed_attempts, force_password_change, created_at) " +
+                "SELECT ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, datetime('now') " +
+                "WHERE NOT EXISTS (SELECT 1 FROM users WHERE LOWER(username) = LOWER(?));";
+        boolean customerCreated = false;
         boolean previousAutoCommit = conn.getAutoCommit();
         conn.setAutoCommit(false);
         try {
-            if (existingUsers == 0) {
-                String insertUserSql = "INSERT INTO users (username, password_hash, salt, full_name, email, phone, role, shift_or_plate, active, failed_attempts, force_password_change, created_at) " +
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, datetime('now'));";
-                try (PreparedStatement pstmt = conn.prepareStatement(insertUserSql)) {
-                    // Admin (Phase 6 demo credentials: admin / Admin@123, force change password on first login)
-                    pstmt.setString(1, "admin");
-                    pstmt.setString(2, adminHash);
+            try (PreparedStatement pstmt = conn.prepareStatement(insertUserSql)) {
+                for (int i = 0; i < accounts.size(); i++) {
+                    DemoAccount a = accounts.get(i);
+                    pstmt.setString(1, a.username);
+                    pstmt.setString(2, hashes.get(i));
                     pstmt.setString(3, PasswordUtils.generateSalt());
-                    pstmt.setString(4, "System Administrator");
-                    pstmt.setString(5, "admin@smartparking.up.gov.in");
-                    pstmt.setString(6, "9876501001");
-                    pstmt.setString(7, "ADMIN");
-                    pstmt.setString(8, null);
-                    pstmt.setInt(9, 1); // force password change
-                    pstmt.executeUpdate();
-
-                    // Attendant (attendant1 / Attendant@123)
-                    pstmt.setString(1, "attendant1");
-                    pstmt.setString(2, attendantHash);
-                    pstmt.setString(3, PasswordUtils.generateSalt());
-                    pstmt.setString(4, "Ramesh Kumar (Attendant)");
-                    pstmt.setString(5, "ramesh@smartparking.up.gov.in");
-                    pstmt.setString(6, "9876501002");
-                    pstmt.setString(7, "ATTENDANT");
-                    pstmt.setString(8, "Morning Shift (Lucknow Control)");
-                    pstmt.setInt(9, 0);
-                    pstmt.executeUpdate();
-
-                    // Customer (customer1 / Customer@123)
-                    pstmt.setString(1, "customer1");
-                    pstmt.setString(2, customerHash);
-                    pstmt.setString(3, PasswordUtils.generateSalt());
-                    pstmt.setString(4, "Priya Sharma");
-                    pstmt.setString(5, "priya.sharma@example.com");
-                    pstmt.setString(6, "9876501003");
-                    pstmt.setString(7, "CUSTOMER");
-                    pstmt.setString(8, "UP32AB1234");
-                    pstmt.setInt(9, 0);
-                    pstmt.executeUpdate();
-                }
-            } else {
-                // Ensure existing demo accounts are upgraded with standard Phase 6 BCrypt credentials
-                String updateSql = "UPDATE users SET password_hash = ?, salt = CASE WHEN salt IS NULL OR salt = '' THEN ? ELSE salt END, phone = ?, force_password_change = ? WHERE LOWER(username) = LOWER(?);";
-                try (PreparedStatement up = conn.prepareStatement(updateSql)) {
-                    up.setString(1, adminHash);
-                    up.setString(2, PasswordUtils.generateSalt());
-                    up.setString(3, "9876501001");
-                    up.setInt(4, 1);
-                    up.setString(5, "admin");
-                    up.executeUpdate();
-
-                    up.setString(1, attendantHash);
-                    up.setString(2, PasswordUtils.generateSalt());
-                    up.setString(3, "9876501002");
-                    up.setInt(4, 0);
-                    up.setString(5, "attendant1");
-                    up.executeUpdate();
-
-                    up.setString(1, customerHash);
-                    up.setString(2, PasswordUtils.generateSalt());
-                    up.setString(3, "9876501003");
-                    up.setInt(4, 0);
-                    up.setString(5, "customer1");
-                    up.executeUpdate();
+                    pstmt.setString(4, a.fullName);
+                    pstmt.setString(5, a.email);
+                    pstmt.setString(6, a.phone);
+                    pstmt.setString(7, a.role);
+                    pstmt.setString(8, a.shiftOrPlate);
+                    pstmt.setInt(9, a.forcePasswordChange ? 1 : 0);
+                    pstmt.setString(10, a.username);
+                    int created = pstmt.executeUpdate();
+                    if (created > 0 && "customer1".equals(a.username)) customerCreated = true;
                 }
             }
             conn.commit();
@@ -351,7 +334,10 @@ public class DatabaseInitializer {
             conn.setAutoCommit(previousAutoCommit);
         }
 
-        // Seed demo customer registered vehicles in user_vehicles table (read the id, close, then write)
+        // The demo customer's vehicles and consent belong to the default account, so they are seeded only when that
+        // account is created here; vehicles or consents later removed are not re-added on restart.
+        if (!customerCreated) return;
+
         Integer customerId = null;
         try (Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery("SELECT user_id FROM users WHERE LOWER(username) = 'customer1';")) {
