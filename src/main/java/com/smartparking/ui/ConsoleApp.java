@@ -22,6 +22,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Scanner;
 import com.smartparking.security.AccessControl;
+import com.smartparking.security.UserSession;
+import com.smartparking.security.Permission;
 
 /**
  * Console Presentation Controller for the Smart Parking Management System.
@@ -65,7 +67,14 @@ public class ConsoleApp {
         System.out.println("Total Floors: " + parkingLot.getFloors().size() + " | Total Slots: " + parkingLot.getTotalCapacity());
 
         if (args != null && args.length > 0 && "--demo".equalsIgnoreCase(args[0])) {
-            runAutomatedDemonstration();
+            // The demonstration writes real tickets, payments and passes, and switches pricing, so it needs an
+            // authorised (admin) sign-in like menu option 1.
+            System.out.println("[DEMO] The automated demonstration writes to the database. Sign in as an administrator.");
+            handleLogin();
+            if (authorize("Automated demonstration", DEMO_PERMISSIONS)) {
+                runAutomatedDemonstration();
+            }
+            authService.logout();
             return;
         }
 
@@ -105,6 +114,50 @@ public class ConsoleApp {
         this.reportService = new ReportService(parkingLot);
     }
 
+    /** The demonstration creates and settles tickets, issues passes and changes pricing: admin only. */
+    private static final Permission[] DEMO_PERMISSIONS = {
+            Permission.PARK_VEHICLE_ENTRY, Permission.CHECKOUT_VEHICLE, Permission.UPDATE_TARIFFS};
+
+    /**
+     * Console access gate for menu operations: requires an unexpired session whose user passes the same
+     * AccessControl checks as the GUI (including the forced-password-change rule). Denials are audited by
+     * AccessControl.checkPermission.
+     */
+    boolean authorize(String operation, Permission... required) {
+        UserSession session = UserSession.getInstance();
+        if (session.isExpired()) {
+            authService.logout();
+            System.out.println("[SESSION EXPIRED] Please sign in again (option 8).");
+            return false;
+        }
+        User user = session.getCurrentUser().orElse(null);
+        if (user == null) {
+            System.out.println("[LOGIN REQUIRED] " + operation + " requires sign-in (option 8).");
+            return false;
+        }
+        try {
+            for (Permission permission : required) {
+                AccessControl.checkPermission(user, permission);
+            }
+            session.recordActivity();
+            return true;
+        } catch (SecurityException e) {
+            System.out.println("[ACCESS DENIED] " + operation + ": " + e.getMessage());
+            return false;
+        }
+    }
+
+    /** Like {@link #authorize} but any one of the permissions is sufficient. */
+    boolean authorizeAny(String operation, Permission... anyOf) {
+        User user = UserSession.getInstance().getCurrentUser().orElse(null);
+        for (Permission permission : anyOf) {
+            if (user != null && AccessControl.hasPermission(user, permission)) {
+                return authorize(operation, permission);
+            }
+        }
+        return authorize(operation, anyOf[0]); // reports login-required / denial (and audits it)
+    }
+
     private void mainMenuLoop() {
         while (true) {
             System.out.println("\n---------------- MAIN MENU ----------------");
@@ -117,23 +170,32 @@ public class ConsoleApp {
             System.out.println("7. Admin Dashboard & Facility Utilization Report");
             System.out.println("8. Role-Based Login (Admin / Attendant / Customer)");
             System.out.println("9. Exit Application");
-            System.out.print("Please enter your choice (1-9): ");
+            System.out.println("0. Logout");
+            System.out.println(UserSession.getInstance().getCurrentUser()
+                    .map(u -> "Signed in as: " + u.getUsername() + " (" + u.getRole().name() + ")")
+                    .orElse("Not signed in. Options 1-7 require sign-in (option 8)."));
+            System.out.print("Please enter your choice (0-9): ");
 
             String input = scanner.hasNextLine() ? scanner.nextLine().trim() : "9";
             switch (input) {
-                case "1" -> runAutomatedDemonstration();
-                case "2" -> handleVehicleEntry();
-                case "3" -> handleVehicleExit();
-                case "4" -> handleVehicleSearch();
-                case "5" -> handleReservation();
-                case "6" -> handleMembership();
-                case "7" -> showAdminReport();
+                case "1" -> { if (authorize("Automated demonstration", DEMO_PERMISSIONS)) runAutomatedDemonstration(); }
+                case "2" -> { if (authorize("Vehicle entry", Permission.PARK_VEHICLE_ENTRY)) handleVehicleEntry(); }
+                case "3" -> { if (authorize("Vehicle exit & payment", Permission.CHECKOUT_VEHICLE)) handleVehicleExit(); }
+                case "4" -> { if (authorize("Vehicle search", Permission.VIEW_FIND_VEHICLE)) handleVehicleSearch(); }
+                case "5" -> { if (authorize("Reservations", Permission.VIEW_BOOKING)) handleReservation(); }
+                case "6" -> { if (authorizeAny("Membership passes", Permission.CUSTOMER_PURCHASE_PASS, Permission.VIEW_PASSES)) handleMembership(); }
+                case "7" -> { if (authorize("Admin report", Permission.VIEW_REPORTS)) showAdminReport(); }
                 case "8" -> handleLogin();
+                case "0" -> {
+                    authService.logout();
+                    System.out.println("[LOGGED OUT]");
+                }
                 case "9" -> {
+                    authService.logout();
                     System.out.println("\nShutting down Smart Parking System. Have a great day!");
                     return;
                 }
-                default -> System.out.println("Invalid selection. Please choose an option from 1 to 9.");
+                default -> System.out.println("Invalid selection. Please choose an option from 0 to 9.");
             }
         }
     }

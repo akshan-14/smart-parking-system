@@ -101,13 +101,13 @@ mvn compile exec:java
 Opens the login window. Demo accounts are listed below and are one click away on the login screen.
 
 ### Running Automated Demonstration (console)
-Executes a complete simulated workflow demonstrating vehicle entry, allocation, EV charging, membership discount, surge pricing, penalties, checkout, and admin reports:
+Executes a complete simulated workflow demonstrating vehicle entry, allocation, EV charging, membership discount, surge pricing, penalties, checkout, and admin reports. It writes real records to the database, so it asks for an administrator sign-in first:
 ```bash
 mvn compile exec:java -Dexec.args="--demo"
 ```
 
 ### Running Interactive Console Application
-Launches the interactive text menu (also used automatically on headless machines):
+Launches the interactive text menu (also used automatically on headless machines). Options 1-7 require signing in with option 8 and follow the same role permissions as the GUI:
 ```bash
 mvn compile exec:java -Dexec.args="--cli"
 ```
