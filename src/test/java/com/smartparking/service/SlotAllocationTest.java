@@ -1,6 +1,6 @@
 package com.smartparking.service;
 
-import com.smartparking.config.DatabaseConnectionManager;
+import com.smartparking.support.TestDatabase;
 import com.smartparking.model.enums.SlotType;
 import com.smartparking.model.enums.VehicleType;
 import com.smartparking.model.parking.ParkingFloor;
@@ -14,7 +14,6 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.io.File;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -26,9 +25,7 @@ class SlotAllocationTest {
 
     @BeforeAll
     static void setUp() {
-        String testDb = "jdbc:sqlite:test_slot_allocation.db";
-        new File("test_slot_allocation.db").delete();
-        DatabaseConnectionManager.setDatabaseUrl(testDb);
+        TestDatabase.useFresh("test_slot_allocation");
         DatabaseInitializer.initializeDatabase();
 
         lot = new ParkingLot("LOT-TEST", "Test Lot", "Uttar Pradesh");

@@ -1,6 +1,6 @@
 package com.smartparking.service;
 
-import com.smartparking.config.DatabaseConnectionManager;
+import com.smartparking.support.TestDatabase;
 import com.smartparking.model.enums.ReservationStatus;
 import com.smartparking.model.enums.VehicleType;
 import com.smartparking.model.reservation.Reservation;
@@ -8,11 +8,11 @@ import com.smartparking.model.slot.ParkingSlot;
 import com.smartparking.repository.DatabaseInitializer;
 import com.smartparking.repository.ParkingSlotDao;
 import com.smartparking.repository.ReservationDao;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.io.File;
 import java.time.LocalDateTime;
 import java.util.Optional;
 
@@ -25,11 +25,15 @@ class ReservationExpiryTest {
     private static ReservationDao reservationDao;
     private static ParkingSlotDao slotDao;
 
+    /** ReservationService starts a 30 s auto-expiry daemon; stop it so it cannot write into later test classes' databases. */
+    @AfterAll
+    static void stopBackgroundExpiry() {
+        if (reservationService != null) reservationService.stopAutoExpiryScheduler();
+    }
+
     @BeforeAll
     static void setUp() {
-        String testDb = "jdbc:sqlite:test_reservation_expiry.db";
-        new File("test_reservation_expiry.db").delete();
-        DatabaseConnectionManager.setDatabaseUrl(testDb);
+        TestDatabase.useFresh("test_reservation_expiry");
         DatabaseInitializer.initializeDatabase();
 
         reservationDao = new ReservationDao();

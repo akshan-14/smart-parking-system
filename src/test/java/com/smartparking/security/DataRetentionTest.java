@@ -1,5 +1,6 @@
 package com.smartparking.security;
 
+import com.smartparking.support.TestDatabase;
 import com.smartparking.config.DatabaseConnectionManager;
 import com.smartparking.model.enums.TicketStatus;
 import com.smartparking.model.enums.VehicleType;
@@ -11,6 +12,7 @@ import com.smartparking.service.DataRetentionService;
 import com.smartparking.util.DateFormat;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
@@ -21,6 +23,12 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @DisplayName("Phase 6: DPDP Act 2023 Data Retention & Anonymization Tests")
 public class DataRetentionTest {
+
+    /** Isolated throw-away database: never touch the real smart_parking.db or another class's file. */
+    @BeforeAll
+    static void isolateDatabase() {
+        TestDatabase.useFresh("test_data_retention");
+    }
 
     private TicketDao ticketDao;
     private DataRetentionService retentionService;

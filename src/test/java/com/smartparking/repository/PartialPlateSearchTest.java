@@ -1,13 +1,12 @@
 package com.smartparking.repository;
 
-import com.smartparking.config.DatabaseConnectionManager;
+import com.smartparking.support.TestDatabase;
 import com.smartparking.model.enums.VehicleType;
 import com.smartparking.model.ticket.ParkingTicket;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.io.File;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -20,9 +19,7 @@ class PartialPlateSearchTest {
 
     @BeforeAll
     static void setUp() {
-        String testDb = "jdbc:sqlite:test_partial_search.db";
-        new File("test_partial_search.db").delete();
-        DatabaseConnectionManager.setDatabaseUrl(testDb);
+        TestDatabase.useFresh("test_partial_search");
         DatabaseInitializer.initializeDatabase();
         ticketDao = new TicketDao();
 

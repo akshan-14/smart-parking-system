@@ -1,6 +1,6 @@
 package com.smartparking.service;
 
-import com.smartparking.config.DatabaseConnectionManager;
+import com.smartparking.support.TestDatabase;
 import com.smartparking.model.enums.TicketStatus;
 import com.smartparking.model.enums.VehicleType;
 import com.smartparking.model.ev.ChargingSession;
@@ -15,7 +15,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.io.File;
 import java.time.LocalDateTime;
 import java.util.Optional;
 
@@ -33,12 +32,10 @@ class EvChargingServiceTest {
     private AuditLogService auditLogService;
 
     private User adminUser;
-    private final String dbUrl = "jdbc:sqlite:test_ev_service.db";
 
     @BeforeEach
     void setUp() {
-        new File("test_ev_service.db").delete();
-        DatabaseConnectionManager.setDatabaseUrl(dbUrl);
+        TestDatabase.useFresh("test_ev_service");
         DatabaseInitializer.initializeDatabase();
 
         chargerDao = new EvChargerDao();
@@ -57,7 +54,6 @@ class EvChargingServiceTest {
     @AfterEach
     void tearDown() {
         UserSession.getInstance().clearSession();
-        new File("test_ev_service.db").delete();
     }
 
     @Test

@@ -1,14 +1,14 @@
 package com.smartparking.util;
 
-import com.smartparking.config.DatabaseConnectionManager;
+import com.smartparking.support.TestDatabase;
 import com.smartparking.model.user.User;
 import com.smartparking.repository.DatabaseInitializer;
 import com.smartparking.service.AuthService;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
-import java.io.File;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -16,11 +16,15 @@ import static org.junit.jupiter.api.Assertions.*;
 @DisplayName("Password Security & Salted Hashing Tests")
 class PasswordSecurityTest {
 
+    /** AuthService.login() starts a real UserSession; clear it so the signed-in role cannot leak into later test classes. */
+    @AfterEach
+    void clearLoginSession() {
+        com.smartparking.security.UserSession.getInstance().clearSession();
+    }
+
     @BeforeAll
     static void setUp() {
-        String testDb = "jdbc:sqlite:test_security.db";
-        new File("test_security.db").delete();
-        DatabaseConnectionManager.setDatabaseUrl(testDb);
+        TestDatabase.useFresh("test_security");
         DatabaseInitializer.initializeDatabase();
     }
 

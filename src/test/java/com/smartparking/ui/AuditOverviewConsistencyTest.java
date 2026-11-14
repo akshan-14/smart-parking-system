@@ -1,13 +1,12 @@
 package com.smartparking.ui;
 
-import com.smartparking.config.DatabaseConnectionManager;
+import com.smartparking.support.TestDatabase;
 import com.smartparking.repository.DatabaseInitializer;
 import com.smartparking.repository.ParkingSlotDao;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.io.File;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -18,9 +17,7 @@ class AuditOverviewConsistencyTest {
 
     @BeforeAll
     static void setUp() {
-        String testDb = "jdbc:sqlite:test_audit_overview.db";
-        new File("test_audit_overview.db").delete();
-        DatabaseConnectionManager.setDatabaseUrl(testDb);
+        TestDatabase.useFresh("test_audit_overview");
         DatabaseInitializer.initializeDatabase();
         slotDao = new ParkingSlotDao();
     }

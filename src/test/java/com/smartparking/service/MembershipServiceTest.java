@@ -1,6 +1,6 @@
 package com.smartparking.service;
 
-import com.smartparking.config.DatabaseConnectionManager;
+import com.smartparking.support.TestDatabase;
 import com.smartparking.model.enums.VehicleType;
 import com.smartparking.model.membership.MembershipPass;
 import com.smartparking.repository.DatabaseInitializer;
@@ -8,7 +8,6 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.io.File;
 import java.time.LocalDate;
 import java.util.Optional;
 
@@ -21,9 +20,7 @@ class MembershipServiceTest {
 
     @BeforeAll
     static void setUp() {
-        String testDb = "jdbc:sqlite:test_membership_service.db";
-        new File("test_membership_service.db").delete();
-        DatabaseConnectionManager.setDatabaseUrl(testDb);
+        TestDatabase.useFresh("test_membership_service");
         DatabaseInitializer.initializeDatabase();
 
         membershipService = new MembershipService();

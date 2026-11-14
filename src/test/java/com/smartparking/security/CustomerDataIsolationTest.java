@@ -1,5 +1,6 @@
 package com.smartparking.security;
 
+import com.smartparking.support.TestDatabase;
 import com.smartparking.model.enums.VehicleType;
 import com.smartparking.model.ticket.ParkingTicket;
 import com.smartparking.repository.DatabaseInitializer;
@@ -7,6 +8,7 @@ import com.smartparking.repository.UserVehicleDao;
 import com.smartparking.service.AuthService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -15,6 +17,12 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @DisplayName("Phase 6: Customer Data Isolation & Vehicle Privacy Tests")
 public class CustomerDataIsolationTest {
+
+    /** Isolated throw-away database: never touch the real smart_parking.db or another class's file. */
+    @BeforeAll
+    static void isolateDatabase() {
+        TestDatabase.useFresh("test_customer_isolation");
+    }
 
     private UserVehicleDao vehicleDao;
 

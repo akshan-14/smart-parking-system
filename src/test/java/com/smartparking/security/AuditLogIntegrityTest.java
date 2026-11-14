@@ -1,10 +1,12 @@
 package com.smartparking.security;
 
+import com.smartparking.support.TestDatabase;
 import com.smartparking.config.DatabaseConnectionManager;
 import com.smartparking.repository.AuditLogDao;
 import com.smartparking.repository.DatabaseInitializer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
@@ -15,6 +17,12 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @DisplayName("Phase 6: Immutable Append-Only Audit Log & Tamper Verification Tests")
 public class AuditLogIntegrityTest {
+
+    /** Isolated throw-away database: never touch the real smart_parking.db or another class's file. */
+    @BeforeAll
+    static void isolateDatabase() {
+        TestDatabase.useFresh("test_audit_integrity");
+    }
 
     private AuditLogDao auditLogDao;
 

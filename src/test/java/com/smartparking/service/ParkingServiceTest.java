@@ -1,6 +1,6 @@
 package com.smartparking.service;
 
-import com.smartparking.config.DatabaseConnectionManager;
+import com.smartparking.support.TestDatabase;
 import com.smartparking.model.enums.PaymentMethodType;
 import com.smartparking.model.enums.TicketStatus;
 import com.smartparking.model.enums.VehicleType;
@@ -17,7 +17,6 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.io.File;
 import java.util.List;
 import java.util.Optional;
 
@@ -32,9 +31,7 @@ class ParkingServiceTest {
     @BeforeAll
     static void setUp() {
         // Use an isolated test database
-        String testDb = "jdbc:sqlite:test_parking_system.db";
-        new File("test_parking_system.db").delete();
-        DatabaseConnectionManager.setDatabaseUrl(testDb);
+        TestDatabase.useFresh("test_parking_system");
 
         DatabaseInitializer.initializeDatabase();
 

@@ -1,6 +1,6 @@
 package com.smartparking.service;
 
-import com.smartparking.config.DatabaseConnectionManager;
+import com.smartparking.support.TestDatabase;
 import com.smartparking.model.enums.UserRole;
 import com.smartparking.model.enums.VehicleType;
 import com.smartparking.model.tariff.TariffRate;
@@ -17,7 +17,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.io.File;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -31,12 +30,10 @@ class SettingsServiceTest {
     private SettingsHistoryDao historyDao;
     private AuditLogService auditLogService;
 
-    private final String dbUrl = "jdbc:sqlite:test_settings_service.db";
 
     @BeforeEach
     void setUp() {
-        new File("test_settings_service.db").delete();
-        DatabaseConnectionManager.setDatabaseUrl(dbUrl);
+        TestDatabase.useFresh("test_settings_service");
         DatabaseInitializer.initializeDatabase();
 
         settingsDao = new SystemSettingsDao();
@@ -53,7 +50,6 @@ class SettingsServiceTest {
     @AfterEach
     void tearDown() {
         UserSession.getInstance().clearSession();
-        new File("test_settings_service.db").delete();
     }
 
     @Test

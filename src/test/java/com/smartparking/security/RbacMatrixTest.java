@@ -1,5 +1,6 @@
 package com.smartparking.security;
 
+import com.smartparking.support.TestDatabase;
 import com.smartparking.model.enums.UserRole;
 import com.smartparking.model.user.Admin;
 import com.smartparking.model.user.Attendant;
@@ -7,12 +8,19 @@ import com.smartparking.model.user.Customer;
 import com.smartparking.model.user.User;
 import com.smartparking.service.AuthService;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 @DisplayName("Phase 6: RBAC Role-Permission Matrix & Backend Enforcement Tests")
 public class RbacMatrixTest {
+
+    /** Isolated throw-away database: never touch the real smart_parking.db or another class's file. */
+    @BeforeAll
+    static void isolateDatabase() {
+        TestDatabase.useFresh("test_rbac_matrix");
+    }
 
     private final User admin = new Admin(1, "admin", "hash", "", "Admin", "admin@smartparking.up.gov.in", "9876501001");
     private final User attendant = new Attendant(2, "attendant1", "hash", "", "Attendant", "attendant@smartparking.up.gov.in", "9876501002");

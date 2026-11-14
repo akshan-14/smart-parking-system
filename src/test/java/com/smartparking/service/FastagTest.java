@@ -1,5 +1,6 @@
 package com.smartparking.service;
 
+import com.smartparking.support.TestDatabase;
 import com.smartparking.config.DatabaseConnectionManager;
 import com.smartparking.model.fastag.FastagAccount;
 import com.smartparking.repository.DatabaseInitializer;
@@ -7,7 +8,6 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.io.File;
 import java.sql.Connection;
 import java.util.Optional;
 
@@ -20,9 +20,7 @@ class FastagTest {
 
     @BeforeAll
     static void setUp() {
-        String testDb = "jdbc:sqlite:test_fastag.db";
-        new File("test_fastag.db").delete();
-        DatabaseConnectionManager.setDatabaseUrl(testDb);
+        TestDatabase.useFresh("test_fastag");
         DatabaseInitializer.initializeDatabase();
         fastagService = new FastagService();
     }

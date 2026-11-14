@@ -1,11 +1,11 @@
 package com.smartparking.repository;
 
+import com.smartparking.support.TestDatabase;
 import com.smartparking.config.DatabaseConnectionManager;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.io.File;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
@@ -17,9 +17,7 @@ class DataMigrationTest {
 
     @BeforeAll
     static void setUp() {
-        String testDb = "jdbc:sqlite:test_migration.db";
-        new File("test_migration.db").delete();
-        DatabaseConnectionManager.setDatabaseUrl(testDb);
+        TestDatabase.useFresh("test_migration");
         DatabaseInitializer.initializeDatabase();
     }
 

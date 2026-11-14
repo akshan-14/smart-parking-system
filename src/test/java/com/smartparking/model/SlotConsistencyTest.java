@@ -1,6 +1,6 @@
 package com.smartparking.model;
 
-import com.smartparking.config.DatabaseConnectionManager;
+import com.smartparking.support.TestDatabase;
 import com.smartparking.model.enums.VehicleType;
 import com.smartparking.model.slot.ParkingSlot;
 import com.smartparking.model.ticket.ParkingTicket;
@@ -12,7 +12,6 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.io.File;
 import java.util.List;
 import java.util.Map;
 
@@ -34,9 +33,7 @@ class SlotConsistencyTest {
 
     @BeforeAll
     static void setUp() {
-        String testDb = "jdbc:sqlite:test_slot_consistency.db";
-        new File("test_slot_consistency.db").delete();
-        DatabaseConnectionManager.setDatabaseUrl(testDb);
+        TestDatabase.useFresh("test_slot_consistency");
         DatabaseInitializer.initializeDatabase();
 
         slotDao = new ParkingSlotDao();

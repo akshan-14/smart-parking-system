@@ -1,6 +1,6 @@
 package com.smartparking.ui;
 
-import com.smartparking.config.DatabaseConnectionManager;
+import com.smartparking.support.TestDatabase;
 import com.smartparking.model.parking.ParkingFloor;
 import com.smartparking.model.parking.ParkingLot;
 import com.smartparking.repository.DatabaseInitializer;
@@ -26,9 +26,7 @@ class VisualVerificationTest {
 
     @BeforeAll
     static void setUp() {
-        String testDb = "jdbc:sqlite:test_visual_verification.db";
-        new File("test_visual_verification.db").delete();
-        DatabaseConnectionManager.setDatabaseUrl(testDb);
+        TestDatabase.useFresh("test_visual_verification");
         DatabaseInitializer.initializeDatabase();
 
         parkingLot = new ParkingLot("LOT-001", "Grand Tech Park Garage", "100 Innovation Blvd, Uttar Pradesh");

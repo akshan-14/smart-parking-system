@@ -259,14 +259,29 @@ public class DatabaseInitializer {
     }
 
     private static void seedUsers(Connection conn) throws Exception {
+        // 1. Read, then close the cursor before writing. Keeping a SELECT open while writing holds a stale WAL
+        //    read snapshot; if any other connection commits meanwhile, SQLite rejects the write with
+        //    SQLITE_BUSY_SNAPSHOT, which busy_timeout cannot retry.
+        int existingUsers;
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM users;")) {
-            if (rs.next() && rs.getInt(1) == 0) {
+            existingUsers = rs.next() ? rs.getInt(1) : 0;
+        }
+
+        // 2. Do the slow BCrypt hashing (cost 12) before touching the database, not inside the transaction.
+        String adminHash = PasswordUtils.hashPassword("Admin@123");
+        String attendantHash = PasswordUtils.hashPassword("Attendant@123");
+        String customerHash = PasswordUtils.hashPassword("Customer@123");
+
+        // 3. Apply all user writes in one short transaction.
+        boolean previousAutoCommit = conn.getAutoCommit();
+        conn.setAutoCommit(false);
+        try {
+            if (existingUsers == 0) {
                 String insertUserSql = "INSERT INTO users (username, password_hash, salt, full_name, email, phone, role, shift_or_plate, active, failed_attempts, force_password_change, created_at) " +
                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, datetime('now'));";
                 try (PreparedStatement pstmt = conn.prepareStatement(insertUserSql)) {
                     // Admin (Phase 6 demo credentials: admin / Admin@123, force change password on first login)
-                    String adminHash = PasswordUtils.hashPassword("Admin@123");
                     pstmt.setString(1, "admin");
                     pstmt.setString(2, adminHash);
                     pstmt.setString(3, PasswordUtils.generateSalt());
@@ -279,7 +294,6 @@ public class DatabaseInitializer {
                     pstmt.executeUpdate();
 
                     // Attendant (attendant1 / Attendant@123)
-                    String attendantHash = PasswordUtils.hashPassword("Attendant@123");
                     pstmt.setString(1, "attendant1");
                     pstmt.setString(2, attendantHash);
                     pstmt.setString(3, PasswordUtils.generateSalt());
@@ -292,7 +306,6 @@ public class DatabaseInitializer {
                     pstmt.executeUpdate();
 
                     // Customer (customer1 / Customer@123)
-                    String customerHash = PasswordUtils.hashPassword("Customer@123");
                     pstmt.setString(1, "customer1");
                     pstmt.setString(2, customerHash);
                     pstmt.setString(3, PasswordUtils.generateSalt());
@@ -308,21 +321,21 @@ public class DatabaseInitializer {
                 // Ensure existing demo accounts are upgraded with standard Phase 6 BCrypt credentials
                 String updateSql = "UPDATE users SET password_hash = ?, salt = CASE WHEN salt IS NULL OR salt = '' THEN ? ELSE salt END, phone = ?, force_password_change = ? WHERE LOWER(username) = LOWER(?);";
                 try (PreparedStatement up = conn.prepareStatement(updateSql)) {
-                    up.setString(1, PasswordUtils.hashPassword("Admin@123"));
+                    up.setString(1, adminHash);
                     up.setString(2, PasswordUtils.generateSalt());
                     up.setString(3, "9876501001");
                     up.setInt(4, 1);
                     up.setString(5, "admin");
                     up.executeUpdate();
 
-                    up.setString(1, PasswordUtils.hashPassword("Attendant@123"));
+                    up.setString(1, attendantHash);
                     up.setString(2, PasswordUtils.generateSalt());
                     up.setString(3, "9876501002");
                     up.setInt(4, 0);
                     up.setString(5, "attendant1");
                     up.executeUpdate();
 
-                    up.setString(1, PasswordUtils.hashPassword("Customer@123"));
+                    up.setString(1, customerHash);
                     up.setString(2, PasswordUtils.generateSalt());
                     up.setString(3, "9876501003");
                     up.setInt(4, 0);
@@ -330,23 +343,30 @@ public class DatabaseInitializer {
                     up.executeUpdate();
                 }
             }
+            conn.commit();
+        } catch (Exception e) {
+            conn.rollback();
+            throw e;
+        } finally {
+            conn.setAutoCommit(previousAutoCommit);
         }
 
-        // Seed demo customer registered vehicles in user_vehicles table
+        // Seed demo customer registered vehicles in user_vehicles table (read the id, close, then write)
+        Integer customerId = null;
         try (Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery("SELECT user_id FROM users WHERE LOWER(username) = 'customer1';")) {
-            if (rs.next()) {
-                int customerId = rs.getInt(1);
-                String insertVehSql = "INSERT OR IGNORE INTO user_vehicles (user_id, license_plate, created_at) VALUES (?, ?, datetime('now'));";
-                try (PreparedStatement psVeh = conn.prepareStatement(insertVehSql)) {
-                    psVeh.setInt(1, customerId);
-                    psVeh.setString(2, "UP32AB1234");
-                    psVeh.executeUpdate();
+            if (rs.next()) customerId = rs.getInt(1);
+        }
+        if (customerId != null) {
+            String insertVehSql = "INSERT OR IGNORE INTO user_vehicles (user_id, license_plate, created_at) VALUES (?, ?, datetime('now'));";
+            try (PreparedStatement psVeh = conn.prepareStatement(insertVehSql)) {
+                psVeh.setInt(1, customerId);
+                psVeh.setString(2, "UP32AB1234");
+                psVeh.executeUpdate();
 
-                    psVeh.setInt(1, customerId);
-                    psVeh.setString(2, "UP14XY5678");
-                    psVeh.executeUpdate();
-                }
+                psVeh.setInt(1, customerId);
+                psVeh.setString(2, "UP14XY5678");
+                psVeh.executeUpdate();
             }
         }
 
@@ -557,74 +577,78 @@ public class DatabaseInitializer {
             }
 
             // 2. Normalize and migrate non-UP plates in tickets
+            // Read all rows and close the cursor before updating (no open read snapshot during writes)
+            java.util.List<Object[]> tList = new java.util.ArrayList<>();
             try (ResultSet rs = stmt.executeQuery("SELECT ticket_id, license_plate FROM tickets;")) {
-                java.util.List<Object[]> tList = new java.util.ArrayList<>();
                 while (rs.next()) {
                     int id = rs.getInt(1);
                     String plate = rs.getString(2);
                     String norm = com.smartparking.util.PlateUtil.mapToUpPlate(plate);
                     tList.add(new Object[]{id, norm});
                 }
-                try (PreparedStatement ps = conn.prepareStatement("UPDATE tickets SET license_plate = ? WHERE ticket_id = ?;")) {
-                    for (Object[] item : tList) {
-                        ps.setString(1, (String) item[1]);
-                        ps.setInt(2, (Integer) item[0]);
-                        ps.executeUpdate();
-                    }
+            }
+            try (PreparedStatement ps = conn.prepareStatement("UPDATE tickets SET license_plate = ? WHERE ticket_id = ?;")) {
+                for (Object[] item : tList) {
+                    ps.setString(1, (String) item[1]);
+                    ps.setInt(2, (Integer) item[0]);
+                    ps.executeUpdate();
                 }
             }
 
             // 3. Normalize and migrate non-UP plates in reservations
+            // Read all rows and close the cursor before updating (no open read snapshot during writes)
+            java.util.List<Object[]> rList = new java.util.ArrayList<>();
             try (ResultSet rs = stmt.executeQuery("SELECT reservation_id, license_plate FROM reservations;")) {
-                java.util.List<Object[]> rList = new java.util.ArrayList<>();
                 while (rs.next()) {
                     int id = rs.getInt(1);
                     String plate = rs.getString(2);
                     String norm = com.smartparking.util.PlateUtil.mapToUpPlate(plate);
                     rList.add(new Object[]{id, norm});
                 }
-                try (PreparedStatement ps = conn.prepareStatement("UPDATE reservations SET license_plate = ? WHERE reservation_id = ?;")) {
-                    for (Object[] item : rList) {
-                        ps.setString(1, (String) item[1]);
-                        ps.setInt(2, (Integer) item[0]);
-                        ps.executeUpdate();
-                    }
+            }
+            try (PreparedStatement ps = conn.prepareStatement("UPDATE reservations SET license_plate = ? WHERE reservation_id = ?;")) {
+                for (Object[] item : rList) {
+                    ps.setString(1, (String) item[1]);
+                    ps.setInt(2, (Integer) item[0]);
+                    ps.executeUpdate();
                 }
             }
 
             // 4. Normalize and migrate non-UP plates in memberships
+            // Read all rows and close the cursor before updating (no open read snapshot during writes)
+            java.util.List<Object[]> mList = new java.util.ArrayList<>();
             try (ResultSet rs = stmt.executeQuery("SELECT membership_id, license_plate FROM memberships;")) {
-                java.util.List<Object[]> mList = new java.util.ArrayList<>();
                 while (rs.next()) {
                     int id = rs.getInt(1);
                     String plate = rs.getString(2);
                     String norm = com.smartparking.util.PlateUtil.mapToUpPlate(plate);
                     mList.add(new Object[]{id, norm});
                 }
-                try (PreparedStatement ps = conn.prepareStatement("UPDATE memberships SET license_plate = ? WHERE membership_id = ?;")) {
-                    for (Object[] item : mList) {
-                        ps.setString(1, (String) item[1]);
-                        ps.setInt(2, (Integer) item[0]);
-                        ps.executeUpdate();
-                    }
+            }
+            try (PreparedStatement ps = conn.prepareStatement("UPDATE memberships SET license_plate = ? WHERE membership_id = ?;")) {
+                for (Object[] item : mList) {
+                    ps.setString(1, (String) item[1]);
+                    ps.setInt(2, (Integer) item[0]);
+                    ps.executeUpdate();
                 }
             }
 
             // 5. Normalize and migrate non-UP plates in slots
+            // Read all rows and close the cursor before updating (no open read snapshot during writes)
+            java.util.List<Object[]> sList = new java.util.ArrayList<>();
             try (ResultSet rs = stmt.executeQuery("SELECT slot_id, current_vehicle_plate FROM slots WHERE current_vehicle_plate IS NOT NULL;")) {
-                java.util.List<Object[]> sList = new java.util.ArrayList<>();
                 while (rs.next()) {
                     String slotId = rs.getString(1);
                     String plate = rs.getString(2);
                     String norm = com.smartparking.util.PlateUtil.mapToUpPlate(plate);
                     sList.add(new Object[]{slotId, norm});
                 }
-                try (PreparedStatement ps = conn.prepareStatement("UPDATE slots SET current_vehicle_plate = ? WHERE slot_id = ?;")) {
-                    for (Object[] item : sList) {
-                        ps.setString(1, (String) item[1]);
-                        ps.setString(2, (String) item[0]);
-                        ps.executeUpdate();
-                    }
+            }
+            try (PreparedStatement ps = conn.prepareStatement("UPDATE slots SET current_vehicle_plate = ? WHERE slot_id = ?;")) {
+                for (Object[] item : sList) {
+                    ps.setString(1, (String) item[1]);
+                    ps.setString(2, (String) item[0]);
+                    ps.executeUpdate();
                 }
             }
 

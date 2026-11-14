@@ -1,5 +1,6 @@
 package com.smartparking.security;
 
+import com.smartparking.support.TestDatabase;
 import com.smartparking.exception.AuthException;
 import com.smartparking.repository.DatabaseInitializer;
 import com.smartparking.repository.TicketDao;
@@ -9,12 +10,26 @@ import com.smartparking.util.InputValidator;
 import com.smartparking.util.PlateUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 @DisplayName("Phase 6: Input Validation, SQL Injection Safety, and XSS Sanitization Tests")
 public class SqlInjectionSafetyTest {
+
+    /** Isolated throw-away database: never touch the real smart_parking.db or another class's file. */
+    @BeforeAll
+    static void isolateDatabase() {
+        TestDatabase.useFresh("test_sql_injection");
+    }
+
+    /** AuthService.login() starts a real UserSession; clear it so the signed-in role cannot leak into later test classes. */
+    @AfterEach
+    void clearLoginSession() {
+        com.smartparking.security.UserSession.getInstance().clearSession();
+    }
 
     private UserDao userDao;
     private TicketDao ticketDao;

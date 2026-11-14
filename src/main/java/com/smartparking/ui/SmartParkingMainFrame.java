@@ -127,7 +127,10 @@ public class SmartParkingMainFrame extends JFrame {
 
     @Override
     public void dispose() {
+        // Stop background writers owned by this window. Without this, every sign-out / sign-in (and every test
+        // that builds a main frame) leaked a ReservationService daemon that kept writing to the database.
         if (anomalyScheduler != null) anomalyScheduler.shutdownNow();
+        if (reservationService != null) reservationService.stopAutoExpiryScheduler();
         super.dispose();
     }
 

@@ -1,11 +1,13 @@
 package com.smartparking.ui;
 
+import com.smartparking.support.TestDatabase;
 import com.smartparking.model.enums.UserRole;
 import com.smartparking.model.parking.ParkingFloor;
 import com.smartparking.model.parking.ParkingLot;
 import com.smartparking.model.user.Admin;
 import com.smartparking.model.user.User;
 import com.smartparking.service.ParkingService;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import javax.swing.*;
@@ -15,6 +17,12 @@ import java.lang.reflect.InvocationTargetException;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 class GUIInitializationTest {
+
+    /** Isolated throw-away database: never touch the real smart_parking.db or another class's file. */
+    @BeforeAll
+    static void isolateDatabase() {
+        TestDatabase.useFresh("test_gui_initialization");
+    }
 
     @Test
     void testGUIInitialization() throws InterruptedException, InvocationTargetException {

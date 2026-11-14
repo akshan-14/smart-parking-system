@@ -1,5 +1,6 @@
 package com.smartparking.service;
 
+import com.smartparking.support.TestDatabase;
 import com.smartparking.config.DatabaseConnectionManager;
 import com.smartparking.model.enums.PaymentMethodType;
 import com.smartparking.model.enums.PaymentStatus;
@@ -10,7 +11,6 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.io.File;
 import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -22,9 +22,7 @@ class PaymentStateMachineTest {
 
     @BeforeAll
     static void setUp() {
-        String testDb = "jdbc:sqlite:test_payment_state.db";
-        new File("test_payment_state.db").delete();
-        DatabaseConnectionManager.setDatabaseUrl(testDb);
+        TestDatabase.useFresh("test_payment_state");
         DatabaseInitializer.initializeDatabase();
         paymentDao = new PaymentDao();
     }

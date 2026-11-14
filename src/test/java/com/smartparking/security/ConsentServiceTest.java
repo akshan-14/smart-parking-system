@@ -1,17 +1,25 @@
 package com.smartparking.security;
 
+import com.smartparking.support.TestDatabase;
 import com.smartparking.repository.ConsentDao;
 import com.smartparking.repository.DatabaseInitializer;
 import com.smartparking.service.AuthService;
 import com.smartparking.service.ConsentService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 @DisplayName("Phase 6: DPDP Statutory Consent Management Tests")
 public class ConsentServiceTest {
+
+    /** Isolated throw-away database: never touch the real smart_parking.db or another class's file. */
+    @BeforeAll
+    static void isolateDatabase() {
+        TestDatabase.useFresh("test_consent_service");
+    }
 
     private AuthService authService;
     private ConsentService consentService;

@@ -1,5 +1,6 @@
 package com.smartparking.concurrency;
 
+import com.smartparking.support.TestDatabase;
 import com.smartparking.config.DatabaseConnectionManager;
 import com.smartparking.model.parking.ParkingFloor;
 import com.smartparking.model.parking.ParkingLot;
@@ -12,6 +13,7 @@ import com.smartparking.repository.TicketDao;
 import com.smartparking.service.ParkingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
@@ -24,6 +26,12 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @DisplayName("Phase 6: High-Concurrency Multi-Gate Slot Allocation & Data Integrity Tests")
 public class SlotAllocationConcurrencyTest {
+
+    /** Isolated throw-away database: never touch the real smart_parking.db or another class's file. */
+    @BeforeAll
+    static void isolateDatabase() {
+        TestDatabase.useFresh("test_slot_concurrency");
+    }
 
     private ParkingLot parkingLot;
     private ParkingService parkingService;
