@@ -1,15 +1,20 @@
 package com.smartparking.security;
 
 import com.smartparking.support.TestDatabase;
+import com.smartparking.model.audit.AuditLogEntry;
 import com.smartparking.model.enums.UserRole;
 import com.smartparking.model.user.Admin;
 import com.smartparking.model.user.Attendant;
 import com.smartparking.model.user.Customer;
 import com.smartparking.model.user.User;
+import com.smartparking.repository.AuditLogDao;
+import com.smartparking.repository.DatabaseInitializer;
 import com.smartparking.service.AuthService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -20,6 +25,9 @@ public class RbacMatrixTest {
     @BeforeAll
     static void isolateDatabase() {
         TestDatabase.useFresh("test_rbac_matrix");
+        // Denials are written to audit_log, so the schema must exist (previously the class silently relied on a
+        // database left behind by another test class, and printed "no such table: audit_log" when isolated).
+        DatabaseInitializer.initializeDatabase();
     }
 
     private final User admin = new Admin(1, "admin", "hash", "", "Admin", "admin@smartparking.up.gov.in", "9876501001");
@@ -79,5 +87,11 @@ public class RbacMatrixTest {
 
         assertTrue(ex.getMessage().contains("Access Denied"));
         UserSession.getInstance().clearSession();
+
+        // Regression: the denial must actually be persisted in the tamper-evident audit log
+        List<AuditLogEntry> denials = new AuditLogDao().findFiltered("ALL", "ACCESS_DENIED", "FAILURE", null, 0, 50);
+        assertTrue(denials.stream().anyMatch(e -> "attendant1".equals(e.getUsername())
+                        && Permission.MANAGE_USERS.name().equals(e.getEntityId())),
+                "Expected an ACCESS_DENIED audit entry for attendant1 attempting MANAGE_USERS");
     }
 }
