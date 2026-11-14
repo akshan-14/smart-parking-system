@@ -762,7 +762,7 @@ public class VehicleExitPanel extends JPanel {
 
         // Enable payment buttons
         setPaymentButtonsEnabled(true);
-        btnOverrideFee.setEnabled(true);
+        btnOverrideFee.setEnabled(canOverrideFee());
         btnCompleteCheckout.setEnabled(true);
         updatePaymentSelectionUI();
 
@@ -799,8 +799,19 @@ public class VehicleExitPanel extends JPanel {
         }
     }
 
+    /** Only users holding OVERRIDE_FEE (administrators) may override fees; the service enforces it as well. */
+    private boolean canOverrideFee() {
+        return com.smartparking.security.UserSession.getInstance().getCurrentUser()
+                .map(u -> com.smartparking.security.AccessControl.hasPermission(u, com.smartparking.security.Permission.OVERRIDE_FEE))
+                .orElse(false);
+    }
+
     private void promptFeeOverride() {
         if (currentBreakdown == null || currentTicket == null) return;
+        if (!canOverrideFee()) {
+            Toast.error(this, "Override not allowed", "Fee overrides require an administrator.");
+            return;
+        }
 
         JTextField feeField = new JTextField(String.valueOf(currentBreakdown.getTotalAmount()));
         UITheme.styleTextField(feeField);
@@ -828,15 +839,22 @@ public class VehicleExitPanel extends JPanel {
                     Toast.error(this, "Override not applied", "The fee can't be negative.");
                     return;
                 }
+                // Authorise and record first; the new fee is applied only if both succeed.
+                String actor = com.smartparking.security.UserSession.getInstance().getCurrentUser()
+                        .map(u -> u.getUsername()).orElse("UNKNOWN");
+                try {
+                    parkingService.getPricingService().getTariffService().recordFeeOverride(
+                            currentTicket.getTicketNumber(), currentBreakdown.getTotalAmount(), newFee, rText, actor);
+                } catch (RuntimeException ex) {
+                    Toast.error(this, "Override not applied", ex.getMessage());
+                    return;
+                }
+
                 overriddenFee = newFee;
                 overrideReason = rText;
 
                 // Recompute GST on overridden taxable fee
                 currentGst = parkingService.getGstCalculator().calculate(newFee);
-
-                // Record in audit log
-                parkingService.getPricingService().getTariffService().recordFeeOverride(
-                        currentTicket.getTicketNumber(), currentBreakdown.getTotalAmount(), newFee, rText, "Duty Manager");
 
                 renderGst();
                 lblTotalDue.setForeground(UITheme.WARNING_TEXT);

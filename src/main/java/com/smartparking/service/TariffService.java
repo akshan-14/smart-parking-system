@@ -143,14 +143,30 @@ public class TariffService {
     }
 
     /**
-     * Records an administrative fee override into the audit_log table.
+     * Authorises and records an administrative fee override. Callers must apply the new fee only after this returns:
+     * it throws (and nothing may be applied) if the user lacks OVERRIDE_FEE or the audit entry cannot be written.
+     * The entry is attributed to the signed-in user; {@code performedBy} is used only for in-process calls without
+     * a session.
      */
     public void recordFeeOverride(String ticketNumber, double oldFee, double newFee, String reason, String performedBy) {
-        if (reason == null || reason.trim().isEmpty()) {
-            throw new IllegalArgumentException("A mandatory reason must be provided for fee override.");
+        if (UserSession.getInstance().isAuthenticated()) {
+            AccessControl.checkPermission(Permission.OVERRIDE_FEE);
         }
-        auditLogDao.logAction("FEE_OVERRIDE", performedBy, ticketNumber,
-                String.format("₹%.2f", oldFee), String.format("₹%.2f", newFee), reason.trim());
+        if (reason == null || reason.trim().length() < 5) {
+            throw new IllegalArgumentException("A reason of at least 5 characters is required for a fee override.");
+        }
+        if (newFee < 0 || Double.isNaN(newFee) || Double.isInfinite(newFee)) {
+            throw new IllegalArgumentException("The overridden fee must be a non-negative amount.");
+        }
+        String oldStr = String.format("₹%.2f", oldFee);
+        String newStr = String.format("₹%.2f", newFee);
+        AuditLogService audit = AuditLogService.getInstance();
+        if (UserSession.getInstance().isAuthenticated()) {
+            audit.log("FEE_OVERRIDE", "TICKET", ticketNumber, oldStr, newStr, reason.trim(), "SUCCESS");
+        } else {
+            audit.logWithActor(null, performedBy != null ? performedBy : "SYSTEM", "SYSTEM", "FEE_OVERRIDE",
+                    "TICKET", ticketNumber, oldStr, newStr, reason.trim(), "SUCCESS");
+        }
     }
 
     // --- Configuration Accessors ---
