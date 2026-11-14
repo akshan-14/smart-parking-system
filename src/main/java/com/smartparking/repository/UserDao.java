@@ -145,7 +145,20 @@ public class UserDao {
         }
     }
 
-    /** Sets a new password hash and clears force_password_change, on the caller's connection. */
+    /**
+     * Sets an administrator-chosen temporary password: the user must change it at next sign-in
+     * (force_password_change = 1). On the caller's connection.
+     */
+    public void setTemporaryPassword(Connection conn, int userId, String newHash) throws SQLException {
+        String sql = "UPDATE users SET password_hash = ?, force_password_change = 1 WHERE user_id = ?;";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, newHash);
+            pstmt.setInt(2, userId);
+            pstmt.executeUpdate();
+        }
+    }
+
+    /** Sets a new password hash chosen by the user and clears force_password_change, on the caller's connection. */
     public void updatePassword(Connection conn, int userId, String newHash) throws SQLException {
         String sql = "UPDATE users SET password_hash = ?, force_password_change = 0 WHERE user_id = ?;";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {

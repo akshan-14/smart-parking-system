@@ -159,7 +159,7 @@ public class UserManagementPanel extends JPanel {
                 String extra = extraField.getText().trim();
 
                 authService.adminCreateUser(name, mobile, user + "@smartparking.up.gov.in", user, pwd, role, extra);
-                com.smartparking.ui.components.Toast.success(this, "User created successfully!", null);
+                com.smartparking.ui.components.Toast.success(this, "User created. They must change this initial password at first sign-in.", null);
                 refreshData();
             } catch (Exception ex) {
                 com.smartparking.ui.components.Toast.error(this, "Error creating user: " + ex.getMessage(), null);
@@ -216,7 +216,7 @@ public class UserManagementPanel extends JPanel {
             String pwd = new String(newPass.getPassword());
             try {
                 authService.adminResetPassword(userId, pwd);
-                com.smartparking.ui.components.Toast.success(this, "Password reset successfully for @" + username, null);
+                com.smartparking.ui.components.Toast.success(this, "Temporary password set for @" + username + ". They must change it at next sign-in.", null);
             } catch (Exception ex) {
                 com.smartparking.ui.components.Toast.error(this, "Failed to reset password: " + ex.getMessage(), null);
             }

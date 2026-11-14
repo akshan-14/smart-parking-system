@@ -236,10 +236,12 @@ public class AuthService {
         InputValidator.validatePassword(newPassword);
         String newHash = PasswordHasher.hash(newPassword);
 
+        // The administrator knows this password, so it is temporary: the user must replace it at next sign-in.
         SqliteTransaction.immediate(conn -> {
-            userDao.updatePassword(conn, targetUserId, newHash);
+            userDao.setTemporaryPassword(conn, targetUserId, newHash);
             auditLogService.recordInTransactionAsSessionUser(conn, "PASSWORD_RESET", "USER", String.valueOf(targetUserId),
-                    null, null, "Admin reset password for user: " + target.getUsername(), "SUCCESS");
+                    null, "forced_change_at_next_sign_in=1",
+                    "Admin reset password for user: " + target.getUsername() + " (must change at next sign-in)", "SUCCESS");
             return null;
         });
     }
@@ -299,14 +301,16 @@ public class AuthService {
 
         String hash = PasswordHasher.hash(plainPassword);
         User user = switch (role) {
+            // The last argument (force_password_change) is true: the administrator chose this initial password, so
+            // the new user must replace it at first sign-in.
             case ADMIN -> new Admin(0, username.toLowerCase(), hash, "", fullName.trim(),
-                    email != null ? email.trim() : "", mobile.trim(), true, 0, null, LocalDateTime.now(), null, false);
+                    email != null ? email.trim() : "", mobile.trim(), true, 0, null, LocalDateTime.now(), null, true);
             case ATTENDANT -> new Attendant(0, username.toLowerCase(), hash, "", fullName.trim(),
                     email != null ? email.trim() : "", mobile.trim(), extra != null ? extra.trim() : "General",
-                    true, 0, null, LocalDateTime.now(), null, false);
+                    true, 0, null, LocalDateTime.now(), null, true);
             case CUSTOMER -> new Customer(0, username.toLowerCase(), hash, "", fullName.trim(),
                     email != null ? email.trim() : "", mobile.trim(), extra != null ? extra.trim() : null,
-                    true, 0, null, LocalDateTime.now(), null, false);
+                    true, 0, null, LocalDateTime.now(), null, true);
         };
 
         int id = SqliteTransaction.immediate(conn -> {
