@@ -166,6 +166,29 @@ public class AuthService {
     }
 
     /**
+     * Completes a mandatory (force_password_change) password change for the signed-in user. This is the only way
+     * out of the restricted state: the current password is re-verified, the new one must be valid and different,
+     * and the flag is cleared in the database, on the given user object and on the session user.
+     */
+    public User completeForcedPasswordChange(User user, String currentPassword, String newPassword) {
+        if (user == null) {
+            throw new IllegalArgumentException("No user to update.");
+        }
+        if (newPassword == null || newPassword.isEmpty()) {
+            throw new IllegalArgumentException("Enter a new password.");
+        }
+        if (newPassword.equals(currentPassword)) {
+            throw new IllegalArgumentException("The new password must be different from the current password.");
+        }
+        changePassword(user.getUserId(), currentPassword, newPassword); // verifies, validates, clears flag in DB
+        user.setForcePasswordChange(false);
+        UserSession.getInstance().getCurrentUser()
+                .filter(u -> u.getUserId() == user.getUserId())
+                .ifPresent(u -> u.setForcePasswordChange(false));
+        return user;
+    }
+
+    /**
      * Administrator resets a user's password.
      */
     public void adminResetPassword(int targetUserId, String newPassword) {

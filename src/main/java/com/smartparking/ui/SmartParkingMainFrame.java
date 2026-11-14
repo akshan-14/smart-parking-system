@@ -84,8 +84,15 @@ public class SmartParkingMainFrame extends JFrame {
     private JPanel sidebarFooter;
     private boolean isSidebarCollapsed = false;
 
+    private static String titleAfterAccessCheck(User currentUser) {
+        AccessControl.requireFullAccess(currentUser);
+        return "Smart Parking System - Grand Tech Park Garage";
+    }
+
     public SmartParkingMainFrame(User currentUser, ParkingLot parkingLot, ParkingService parkingService) {
-        super("Smart Parking System - Grand Tech Park Garage");
+        // The access gate runs before the frame (or any panel) is constructed: no window for a user who must
+        // change their password first.
+        super(titleAfterAccessCheck(currentUser));
         this.currentUser = currentUser;
         this.parkingLot = parkingLot;
         this.parkingService = parkingService;

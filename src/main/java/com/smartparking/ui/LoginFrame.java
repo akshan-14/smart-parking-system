@@ -8,6 +8,7 @@ import com.smartparking.model.slot.ParkingSlot;
 import com.smartparking.model.user.User;
 import com.smartparking.repository.DatabaseInitializer;
 import com.smartparking.repository.ParkingSlotDao;
+import com.smartparking.security.AccessControl;
 import com.smartparking.service.AuthService;
 import com.smartparking.service.ParkingService;
 import com.smartparking.ui.components.ModernButton;
@@ -365,6 +366,21 @@ public class LoginFrame extends JFrame {
         panel.add(row);
     }
 
+    /** Asks a flagged user for a new password; returns true only if the password was actually changed. */
+    @FunctionalInterface
+    interface ForcedPasswordChangePrompt {
+        boolean changePassword(User user, String currentPassword);
+    }
+
+    /** Replaceable in tests so the modal dialog does not block; production uses the Swing dialog. */
+    ForcedPasswordChangePrompt forcedPasswordChangePrompt = this::showForcePasswordChangeDialog;
+
+    /** Opens the main window for a fully authorised user. Replaceable in tests. */
+    java.util.function.Consumer<User> mainWindowOpener = user -> {
+        SmartParkingMainFrame mainFrame = new SmartParkingMainFrame(user, parkingLot, parkingService);
+        mainFrame.setVisible(true);
+    };
+
     private void performLogin() {
         String username = usernameField.getText().trim();
         String password = new String(passwordField.getPassword()).trim();
@@ -375,23 +391,37 @@ public class LoginFrame extends JFrame {
             return;
         }
         clearError();
+        attemptLogin(username, password);
+    }
 
+    /**
+     * Signs in and opens the main window only for a user with full access. A user flagged for a forced password
+     * change must complete it first; cancelling (or failing) signs them out and keeps them on this login screen.
+     * Returns true when the main window is being opened.
+     */
+    boolean attemptLogin(String username, String password) {
         try {
             Optional<User> userOpt = authService.authenticate(username, password);
-            if (userOpt.isPresent()) {
-                User user = userOpt.get();
-
-                // Force password change on first administrator login
-                if (user.isForcePasswordChange()) {
-                    showForcePasswordChangeDialog(user, password);
-                }
-
-                dispose();
-                SwingUtilities.invokeLater(() -> {
-                    SmartParkingMainFrame mainFrame = new SmartParkingMainFrame(user, parkingLot, parkingService);
-                    mainFrame.setVisible(true);
-                });
+            if (userOpt.isEmpty()) {
+                return false;
             }
+            User user = userOpt.get();
+
+            if (AccessControl.requiresPasswordChange(user)) {
+                boolean changed = forcedPasswordChangePrompt.changePassword(user, password);
+                if (!changed || AccessControl.requiresPasswordChange(user)) {
+                    authService.logout();
+                    passwordField.setText("");
+                    showError("You must set a new password before you can continue. Sign in again to retry.");
+                    passwordField.requestFocusInWindow();
+                    return false;
+                }
+            }
+
+            AccessControl.requireFullAccess(user); // same rule the main window and the console enforce
+            dispose();
+            SwingUtilities.invokeLater(() -> mainWindowOpener.accept(user));
+            return true;
         } catch (AccountLockedException ale) {
             showError(ale.getMessage());
         } catch (AuthException ae) {
@@ -399,25 +429,28 @@ public class LoginFrame extends JFrame {
             passwordField.selectAll();
             passwordField.requestFocusInWindow();
         } catch (Exception ex) {
+            authService.logout();
             showError("Sign-in failed: " + ex.getMessage());
         }
+        return false;
     }
 
-    private void showForcePasswordChangeDialog(User user, String oldPassword) {
+    /** Returns true only when the password was changed; Cancel or closing the dialog returns false. */
+    private boolean showForcePasswordChangeDialog(User user, String oldPassword) {
         JPasswordField newPassField = new JPasswordField(15);
         JPasswordField confirmField = new JPasswordField(15);
 
-        JPanel p = new JPanel(new GridLayout(4, 1, 4, 4));
-        p.add(new JLabel("First-time Login: You must change your default administrator password."));
+        JPanel p = new JPanel(new GridLayout(5, 1, 4, 4));
+        p.add(new JLabel("You must change your password before using the system."));
         p.add(new JLabel("New Password (min 8 characters, at least 1 letter and 1 digit):"));
         p.add(newPassField);
+        p.add(new JLabel("Confirm New Password:"));
         p.add(confirmField);
 
-        boolean updated = false;
-        while (!updated) {
-            int res = JOptionPane.showConfirmDialog(this, p, "Update Initial Password", JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
+        while (true) {
+            int res = JOptionPane.showConfirmDialog(this, p, "Password Change Required", JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
             if (res != JOptionPane.OK_OPTION) {
-                break;
+                return false;
             }
 
             String newPwd = new String(newPassField.getPassword());
@@ -429,10 +462,9 @@ public class LoginFrame extends JFrame {
             }
 
             try {
-                authService.changePassword(user.getUserId(), oldPassword, newPwd);
-                user.setForcePasswordChange(false);
-                JOptionPane.showMessageDialog(this, "Administrator password successfully updated!", "Success", JOptionPane.INFORMATION_MESSAGE);
-                updated = true;
+                authService.completeForcedPasswordChange(user, oldPassword, newPwd);
+                JOptionPane.showMessageDialog(this, "Password successfully updated!", "Success", JOptionPane.INFORMATION_MESSAGE);
+                return true;
             } catch (Exception e) {
                 JOptionPane.showMessageDialog(this, "Password rejected: " + e.getMessage(), "Validation Error", JOptionPane.ERROR_MESSAGE);
             }

@@ -1,5 +1,6 @@
 package com.smartparking.security;
 
+import com.smartparking.exception.PasswordChangeRequiredException;
 import com.smartparking.model.enums.UserRole;
 import com.smartparking.model.user.User;
 import com.smartparking.service.AuditLogService;
@@ -77,8 +78,31 @@ public final class AccessControl {
      */
     public static boolean hasPermission(User user, Permission permission) {
         if (user == null || permission == null) return false;
+        // A user who must change their password has no permissions until they have done so.
+        if (requiresPasswordChange(user)) return false;
         Set<Permission> perms = ROLE_PERMISSIONS.get(user.getRole());
         return perms != null && perms.contains(permission);
+    }
+
+    /**
+     * True when the user is flagged force_password_change and so may not use normal application functionality.
+     */
+    public static boolean requiresPasswordChange(User user) {
+        return user != null && user.isForcePasswordChange();
+    }
+
+    /**
+     * Gate for entering the application (main window, console session). Throws unless the user is signed in and does
+     * not have a pending forced password change. GUI and console both go through this rule.
+     */
+    public static void requireFullAccess(User user) {
+        if (user == null) {
+            throw new SecurityException("Access Denied: no authenticated user.");
+        }
+        if (requiresPasswordChange(user)) {
+            throw new PasswordChangeRequiredException(
+                    "Access Denied: user [" + user.getUsername() + "] must change the password before continuing.");
+        }
     }
 
     /**
@@ -118,10 +142,16 @@ public final class AccessControl {
                     permission.name(),
                     null,
                     null,
-                    "Unauthorized attempt to perform action: " + permission.name(),
+                    requiresPasswordChange(user)
+                            ? "Attempt to perform action before mandatory password change: " + permission.name()
+                            : "Unauthorized attempt to perform action: " + permission.name(),
                     "FAILURE"
             );
 
+            if (requiresPasswordChange(user)) {
+                throw new PasswordChangeRequiredException("Access Denied: password change required before ["
+                        + permission.name() + "].");
+            }
             throw new SecurityException("Access Denied: Role [" + role + "] is not authorized for [" + permission.name() + "].");
         }
     }

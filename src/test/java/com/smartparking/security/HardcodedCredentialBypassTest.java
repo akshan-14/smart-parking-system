@@ -109,7 +109,10 @@ public class HardcodedCredentialBypassTest {
         assertThrows(SecurityException.class, () -> AccessControl.checkPermission(Permission.MANAGE_USERS));
         UserSession.getInstance().clearSession();
 
+        // The default admin must change the password before any admin permission is granted
         User admin = auth.authenticate("admin", "Admin@123").orElseThrow();
+        assertFalse(AccessControl.hasPermission(admin, Permission.MANAGE_USERS));
+        auth.completeForcedPasswordChange(admin, "Admin@123", "Rotated#Admin2026");
         assertTrue(AccessControl.hasPermission(admin, Permission.MANAGE_USERS));
         assertDoesNotThrow(() -> AccessControl.checkPermission(Permission.MANAGE_USERS));
     }

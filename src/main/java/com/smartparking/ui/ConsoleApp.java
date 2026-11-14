@@ -21,6 +21,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.Scanner;
+import com.smartparking.security.AccessControl;
 
 /**
  * Console Presentation Controller for the Smart Parking Management System.
@@ -33,7 +34,17 @@ public class ConsoleApp {
     private ReservationService reservationService;
     private MembershipService membershipService;
     private ReportService reportService;
-    private final Scanner scanner = new Scanner(System.in);
+    private final Scanner scanner;
+
+    public ConsoleApp() {
+        this(new Scanner(System.in), null);
+    }
+
+    /** For tests: scripted input and a pre-built AuthService (start() still initialises the rest). */
+    ConsoleApp(Scanner scanner, AuthService authService) {
+        this.scanner = scanner;
+        this.authService = authService;
+    }
 
     public void start(String[] args) {
         System.out.println("==================================================================");
@@ -86,7 +97,9 @@ public class ConsoleApp {
 
     private void initializeServices() {
         this.parkingService = ParkingService.createDefault(parkingLot);
-        this.authService = new AuthService();
+        if (this.authService == null) {
+            this.authService = new AuthService();
+        }
         this.reservationService = new ReservationService();
         this.membershipService = new MembershipService();
         this.reportService = new ReportService(parkingLot);
@@ -376,20 +389,64 @@ public class ConsoleApp {
         System.out.println("\n" + reportService.generateFullReport());
     }
 
-    private void handleLogin() {
+    /**
+     * Console sign-in. Applies the same rule as the GUI: a user flagged for a forced password change must set a new
+     * password right away; if they don't (blank, mismatch, rejected), they are signed out again.
+     */
+    void handleLogin() {
         System.out.println("\n--- Role-Based Login ---");
         System.out.print("Username (e.g., admin, attendant1, customer1): ");
         String username = scanner.nextLine().trim();
         System.out.print("Password (fresh-install defaults: Admin@123, Attendant@123, Customer@123): ");
         String password = scanner.nextLine().trim();
 
-        Optional<User> userOpt = authService.authenticate(username, password);
-        if (userOpt.isPresent()) {
-            User user = userOpt.get();
-            System.out.println("\n[LOGIN SUCCESSFUL] Welcome, " + user.getFullName() + "!");
-            System.out.println("Role: " + user.getRole().getRoleDescription());
-        } else {
-            System.out.println("\n[LOGIN FAILED] Invalid credentials.");
+        Optional<User> userOpt;
+        try {
+            userOpt = authService.authenticate(username, password);
+        } catch (RuntimeException e) {
+            System.out.println("\n[LOGIN FAILED] " + e.getMessage());
+            return;
         }
+        if (userOpt.isEmpty()) {
+            System.out.println("\n[LOGIN FAILED] Invalid credentials.");
+            return;
+        }
+        User user = userOpt.get();
+
+        if (AccessControl.requiresPasswordChange(user)) {
+            System.out.println("\n[PASSWORD CHANGE REQUIRED] You must set a new password before continuing.");
+            System.out.print("New password (min 8 characters, at least 1 letter and 1 digit; blank to cancel): ");
+            String newPassword = scanner.hasNextLine() ? scanner.nextLine() : "";
+            if (newPassword.isEmpty()) {
+                authService.logout();
+                System.out.println("[LOGIN CANCELLED] Password not changed. You have been signed out.");
+                return;
+            }
+            System.out.print("Confirm new password: ");
+            String confirm = scanner.hasNextLine() ? scanner.nextLine() : "";
+            if (!newPassword.equals(confirm)) {
+                authService.logout();
+                System.out.println("[LOGIN CANCELLED] Passwords do not match. You have been signed out.");
+                return;
+            }
+            try {
+                authService.completeForcedPasswordChange(user, password, newPassword);
+            } catch (RuntimeException e) {
+                authService.logout();
+                System.out.println("[LOGIN CANCELLED] Password rejected: " + e.getMessage() + " You have been signed out.");
+                return;
+            }
+            System.out.println("[PASSWORD UPDATED] Your new password is active.");
+        }
+
+        try {
+            AccessControl.requireFullAccess(user); // same gate as the GUI main window
+        } catch (SecurityException e) {
+            authService.logout();
+            System.out.println("\n[LOGIN FAILED] " + e.getMessage());
+            return;
+        }
+        System.out.println("\n[LOGIN SUCCESSFUL] Welcome, " + user.getFullName() + "!");
+        System.out.println("Role: " + user.getRole().getRoleDescription());
     }
 }
