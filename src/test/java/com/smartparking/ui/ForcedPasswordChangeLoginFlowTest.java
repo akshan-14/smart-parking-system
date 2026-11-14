@@ -132,14 +132,19 @@ public class ForcedPasswordChangeLoginFlowTest {
         if (GraphicsEnvironment.isHeadless()) return;
         User flagged = new UserDao().findByUsername("admin").orElseThrow();
         assertTrue(flagged.isForcePasswordChange());
-        int framesBefore = Frame.getFrames().length;
+        // Frame.getFrames() also lists frames from earlier tests until they are garbage collected, so compare the
+        // set of main windows by identity rather than counting frames.
+        java.util.Set<Frame> mainFramesBefore = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        for (Frame f : Frame.getFrames()) if (f instanceof SmartParkingMainFrame) mainFramesBefore.add(f);
         SwingUtilities.invokeAndWait(() -> {
             ParkingLot lot = new ParkingLot("LOT-T", "Test", "Test");
             lot.addFloor(new ParkingFloor(1, "Floor 1"));
             assertThrows(PasswordChangeRequiredException.class,
                     () -> new SmartParkingMainFrame(flagged, lot, ParkingService.createDefault(lot)));
         });
-        assertEquals(framesBefore, Frame.getFrames().length, "no main frame may be created");
+        for (Frame f : Frame.getFrames()) {
+            assertFalse(f instanceof SmartParkingMainFrame && !mainFramesBefore.contains(f), "no main frame may be created");
+        }
         assertTrue(UserSession.getInstance().getCurrentUser().isEmpty(), "no session may be started");
     }
 }
