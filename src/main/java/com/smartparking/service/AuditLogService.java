@@ -63,6 +63,9 @@ public class AuditLogService {
             "ALERT_ACKNOWLEDGED", "ALERT_RESOLVED",
             "EV_CHARGING_STARTED", "EV_CHARGING_STOPPED", "CHARGER_STATUS_UPDATED",
             "RESERVATION_CREATED", "RESERVATION_CANCELLED",
+            // Automatic no-show expiry: runs at service start-up and every 30 s; strict handling would make an audit
+            // outage prevent the application (and its reservation screen) from starting.
+            "RESERVATIONS_PURGED",
             "PASS_ISSUED", "PASS_RENEWED", "PASS_CANCELLED",
             "DATABASE_BACKUP_CREATED", "DAILY_BACKUP_CREATED");
 
