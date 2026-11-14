@@ -83,14 +83,10 @@ public class AuthService {
             }
         }
 
-        // Verify password (supports BCrypt, legacy salt, and demo aliases)
+        // Verify the password against the stored hash only (BCrypt, or legacy salted SHA-256 for old rows).
+        // There are deliberately no hard-coded alternative passwords: any bypass here would keep working after the
+        // user changed their password.
         boolean passwordMatch = PasswordHasher.verify(plainPassword, user.getSalt(), user.getPasswordHash());
-        if (!passwordMatch && "admin".equalsIgnoreCase(user.getUsername()) && "admin123".equals(plainPassword)) {
-            passwordMatch = true;
-        }
-        if (!passwordMatch && "attendant1".equalsIgnoreCase(user.getUsername()) && "attendant123".equals(plainPassword)) {
-            passwordMatch = true;
-        }
 
         if (passwordMatch) {
             // Reset failed counter and update last login

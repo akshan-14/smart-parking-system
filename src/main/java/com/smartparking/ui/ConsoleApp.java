@@ -380,7 +380,7 @@ public class ConsoleApp {
         System.out.println("\n--- Role-Based Login ---");
         System.out.print("Username (e.g., admin, attendant1, customer1): ");
         String username = scanner.nextLine().trim();
-        System.out.print("Password (admin123, attendant123, customer123): ");
+        System.out.print("Password (fresh-install defaults: Admin@123, Attendant@123, Customer@123): ");
         String password = scanner.nextLine().trim();
 
         Optional<User> userOpt = authService.authenticate(username, password);

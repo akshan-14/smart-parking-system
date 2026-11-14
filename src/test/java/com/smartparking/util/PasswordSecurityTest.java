@@ -73,15 +73,15 @@ class PasswordSecurityTest {
     void testAuthServiceWithSaltedUsers() {
         AuthService authService = new AuthService();
 
-        // Admin authentication with salted hash
-        Optional<User> adminOpt = authService.authenticate("admin", "admin123");
+        // Admin authentication with the seeded fresh-install credentials, verified against the stored hash
+        Optional<User> adminOpt = authService.authenticate("admin", "Admin@123");
         assertTrue(adminOpt.isPresent(), "Admin must authenticate successfully with seeded salted hash");
         assertEquals("admin", adminOpt.get().getUsername());
         assertNotNull(adminOpt.get().getSalt());
         assertFalse(adminOpt.get().getSalt().isEmpty());
 
         // Attendant authentication
-        Optional<User> attendantOpt = authService.authenticate("attendant1", "attendant123");
+        Optional<User> attendantOpt = authService.authenticate("attendant1", "Attendant@123");
         assertTrue(attendantOpt.isPresent());
 
         // Incorrect password fails with AuthException
