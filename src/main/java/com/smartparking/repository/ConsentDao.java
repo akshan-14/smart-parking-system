@@ -14,31 +14,43 @@ import java.util.List;
 public class ConsentDao {
 
     public void saveConsent(String userIdOrPlate, String purpose, String textVersion) {
-        String sql = "INSERT INTO consents (user_id_or_plate, purpose, text_version, given_at, withdrawn_at) " +
-                "VALUES (?, ?, ?, ?, NULL);";
-        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, userIdOrPlate != null ? userIdOrPlate.trim().toLowerCase() : "ANONYMOUS");
-            ps.setString(2, purpose);
-            ps.setString(3, textVersion);
-            ps.setString(4, DateFormat.toDbString(LocalDateTime.now()));
-            ps.executeUpdate();
+        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection()) {
+            saveConsent(conn, userIdOrPlate, purpose, textVersion);
         } catch (SQLException e) {
             throw new RuntimeException("Error recording DPDP consent: " + e.getMessage(), e);
         }
     }
 
+    /** Inserts the consent on the caller's connection (and transaction). */
+    public void saveConsent(Connection conn, String userIdOrPlate, String purpose, String textVersion) throws SQLException {
+        String sql = "INSERT INTO consents (user_id_or_plate, purpose, text_version, given_at, withdrawn_at) " +
+                "VALUES (?, ?, ?, ?, NULL);";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, userIdOrPlate != null ? userIdOrPlate.trim().toLowerCase() : "ANONYMOUS");
+            ps.setString(2, purpose);
+            ps.setString(3, textVersion);
+            ps.setString(4, DateFormat.toDbString(LocalDateTime.now()));
+            ps.executeUpdate();
+        }
+    }
+
     public void withdrawConsent(String userIdOrPlate, String purpose) {
+        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection()) {
+            withdrawConsent(conn, userIdOrPlate, purpose);
+        } catch (SQLException e) {
+            throw new RuntimeException("Error withdrawing DPDP consent: " + e.getMessage(), e);
+        }
+    }
+
+    /** Withdraws active consents on the caller's connection; returns the number of consents withdrawn. */
+    public int withdrawConsent(Connection conn, String userIdOrPlate, String purpose) throws SQLException {
         String sql = "UPDATE consents SET withdrawn_at = ? " +
                 "WHERE LOWER(user_id_or_plate) = LOWER(?) AND purpose = ? AND withdrawn_at IS NULL;";
-        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, DateFormat.toDbString(LocalDateTime.now()));
             ps.setString(2, userIdOrPlate.trim());
             ps.setString(3, purpose);
-            ps.executeUpdate();
-        } catch (SQLException e) {
-            throw new RuntimeException("Error withdrawing DPDP consent: " + e.getMessage(), e);
+            return ps.executeUpdate();
         }
     }
 

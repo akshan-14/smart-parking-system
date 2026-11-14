@@ -8,6 +8,7 @@ import com.smartparking.model.user.Admin;
 import com.smartparking.model.user.Attendant;
 import com.smartparking.model.user.Customer;
 import com.smartparking.model.user.User;
+import com.smartparking.repository.ConsentDao;
 import com.smartparking.repository.SystemSettingsDao;
 import com.smartparking.repository.SqliteTransaction;
 import com.smartparking.repository.UserDao;
@@ -30,11 +31,13 @@ public class AuthService {
     private final UserDao userDao;
     private final SystemSettingsDao settingsDao;
     private final AuditLogService auditLogService;
+    private final ConsentService consentService;
 
     public AuthService(UserDao userDao, SystemSettingsDao settingsDao, AuditLogService auditLogService) {
         this.userDao = userDao;
         this.settingsDao = settingsDao;
         this.auditLogService = auditLogService;
+        this.consentService = new ConsentService(new ConsentDao(), auditLogService);
     }
 
     public AuthService() {
@@ -268,17 +271,16 @@ public class AuthService {
         Customer customer = new Customer(0, username.toLowerCase(), hash, "", fullName.trim(),
                 null, mobile.trim(), null, true, 0, null, LocalDateTime.now(), null, false);
 
-        // Account and USER_REGISTERED entry commit together, or neither does.
+        // Account, mandatory DPDP consent, and both audit entries commit together, or none of them does: an
+        // account can never exist without its registration consent record.
         int newId = SqliteTransaction.immediate(conn -> {
             int id = userDao.save(conn, customer);
+            consentService.recordConsent(conn, username.toLowerCase(), "REGISTRATION", "v1.0 (DPDP 2023)");
             auditLogService.recordInTransaction(conn, id, username.toLowerCase(), "CUSTOMER",
                     "USER_REGISTERED", "USER", String.valueOf(id),
                     null, null, "Customer self-registered with DPDP consent", "SUCCESS");
             return id;
         });
-
-        // Record DPDP Consent (separate service/connection, so it runs after the commit above)
-        ConsentService.getInstance().recordConsent(username.toLowerCase(), "REGISTRATION", "v1.0 (DPDP 2023)");
 
         return userDao.findById(newId).orElse(customer);
     }

@@ -1,6 +1,10 @@
 package com.smartparking.service;
 
 import com.smartparking.repository.ConsentDao;
+import com.smartparking.repository.SqliteTransaction;
+
+import java.sql.Connection;
+import java.sql.SQLException;
 
 import java.util.List;
 
@@ -34,9 +38,18 @@ public class ConsentService {
         return instance;
     }
 
+    /** Records consent and its CONSENT_RECORDED audit entry in one transaction (both or neither). */
     public void recordConsent(String userIdOrPlate, String purpose, String textVersion) {
-        consentDao.saveConsent(userIdOrPlate, purpose, textVersion != null ? textVersion : DEFAULT_VERSION);
-        auditLogService.log("CONSENT_RECORDED", "DPDP_CONSENT", userIdOrPlate,
+        SqliteTransaction.immediate(conn -> {
+            recordConsent(conn, userIdOrPlate, purpose, textVersion);
+            return null;
+        });
+    }
+
+    /** Records consent and its audit entry inside the caller's transaction (e.g. account registration). */
+    public void recordConsent(Connection conn, String userIdOrPlate, String purpose, String textVersion) throws SQLException {
+        consentDao.saveConsent(conn, userIdOrPlate, purpose, textVersion != null ? textVersion : DEFAULT_VERSION);
+        auditLogService.recordInTransactionAsSessionUser(conn, "CONSENT_RECORDED", "DPDP_CONSENT", userIdOrPlate,
                 null, purpose, "User gave statutory consent for: " + purpose, "SUCCESS");
     }
 
@@ -44,10 +57,14 @@ public class ConsentService {
         recordConsent(userIdOrPlate, purpose, DEFAULT_VERSION);
     }
 
+    /** Withdraws consent and records CONSENT_WITHDRAWN in one transaction (both or neither). */
     public void withdrawConsent(String userIdOrPlate, String purpose) {
-        consentDao.withdrawConsent(userIdOrPlate, purpose);
-        auditLogService.log("CONSENT_WITHDRAWN", "DPDP_CONSENT", userIdOrPlate,
-                "ACTIVE", "WITHDRAWN", "User withdrew statutory consent for: " + purpose, "SUCCESS");
+        SqliteTransaction.immediate(conn -> {
+            consentDao.withdrawConsent(conn, userIdOrPlate, purpose);
+            auditLogService.recordInTransactionAsSessionUser(conn, "CONSENT_WITHDRAWN", "DPDP_CONSENT", userIdOrPlate,
+                    "ACTIVE", "WITHDRAWN", "User withdrew statutory consent for: " + purpose, "SUCCESS");
+            return null;
+        });
     }
 
     public boolean hasValidConsent(String userIdOrPlate, String purpose) {
