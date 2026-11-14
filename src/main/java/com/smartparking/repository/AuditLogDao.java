@@ -1,6 +1,7 @@
 package com.smartparking.repository;
 
 import com.smartparking.config.DatabaseConnectionManager;
+import com.smartparking.exception.AuditLogException;
 import com.smartparking.model.audit.AuditLogEntry;
 import com.smartparking.util.DateFormat;
 
@@ -23,22 +24,50 @@ import java.util.List;
 public class AuditLogDao {
 
     /**
-     * Records an immutable audit log entry.
-     * Computes the SHA-256 hash chaining with the previous entry's hash.
+     * Records an immutable audit log entry in its own transaction.
+     *
+     * <p>The chain head is read and the new row inserted inside one {@code BEGIN IMMEDIATE} transaction, so
+     * concurrent writers (any thread, any DAO instance, any process on the same database file) are serialised by
+     * SQLite's write lock and can never both chain onto the same previous hash.
+     *
+     * @throws AuditLogException if the entry could not be written; the caller decides whether that is fatal.
      */
-    public synchronized void append(Integer userId, String username, String role, String action,
-                                   String entityType, String entityId, String oldValue,
-                                   String newValue, String reason, String ipOrTerminal, String result) {
+    public void append(Integer userId, String username, String role, String action,
+                       String entityType, String entityId, String oldValue,
+                       String newValue, String reason, String ipOrTerminal, String result) {
+        try {
+            SqliteTransaction.immediate(conn -> {
+                append(conn, userId, username, role, action, entityType, entityId, oldValue, newValue,
+                        reason, ipOrTerminal, result);
+                return null;
+            });
+        } catch (AuditLogException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw new AuditLogException("Failed to write audit entry " + action + ": " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Writes an audit entry using the caller's connection, as part of the caller's write transaction (see
+     * {@link SqliteTransaction}). Nothing is committed here: the entry is committed or rolled back together with
+     * the caller's other changes. The connection must already hold the write lock (BEGIN IMMEDIATE), which keeps
+     * the chain head stable until commit.
+     *
+     * @throws AuditLogException if the chain head cannot be read or the row cannot be inserted
+     */
+    public void append(Connection conn, Integer userId, String username, String role, String action,
+                       String entityType, String entityId, String oldValue,
+                       String newValue, String reason, String ipOrTerminal, String result) {
         String timestampStr = DateFormat.toDbString(LocalDateTime.now());
-        String prevHash = getLatestRowHash();
+        String prevHash = getLatestRowHash(conn);
         String rowHash = computeRowHash(prevHash, timestampStr, String.valueOf(userId), action, entityType, entityId, oldValue, newValue, reason, result);
 
         String sql = "INSERT INTO audit_log (timestamp, user_id, username, role, action, entity_type, " +
                 "entity_id, old_value, new_value, reason, ip_or_terminal, result, prev_hash, row_hash, performed_by, ticket_id) " +
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
 
-        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, timestampStr);
             if (userId != null) {
                 ps.setInt(2, userId);
@@ -61,7 +90,7 @@ public class AuditLogDao {
             ps.setString(16, entityId);
             ps.executeUpdate();
         } catch (SQLException e) {
-            System.err.println("CRITICAL: Failed to write to audit_log: " + e.getMessage());
+            throw new AuditLogException("Failed to write audit entry " + action + ": " + e.getMessage(), e);
         }
     }
 
@@ -73,22 +102,49 @@ public class AuditLogDao {
     }
 
     /**
-     * Retrieves the row_hash of the most recently inserted record.
+     * Retrieves the row_hash of the most recently inserted record ("GENESIS" for an empty log).
+     *
+     * @throws AuditLogException if the chain head cannot be read; it never silently restarts the chain
      */
     public String getLatestRowHash() {
-        String sql = "SELECT row_hash FROM audit_log ORDER BY rowid DESC LIMIT 1;";
-        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection();
-             Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery(sql)) {
-            if (rs.next()) {
-                String hash = rs.getString("row_hash");
-                if (hash != null && !hash.isBlank()) {
-                    return hash;
-                }
-            }
-        } catch (SQLException ignored) {
+        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection()) {
+            return getLatestRowHash(conn);
+        } catch (SQLException e) {
+            throw new AuditLogException("Cannot read the audit hash chain head: " + e.getMessage(), e);
         }
-        return "GENESIS";
+    }
+
+    /** Chain head as seen by the given connection (inside the caller's transaction when there is one). */
+    public String getLatestRowHash(Connection conn) {
+        try {
+            return readLatestRowHash(conn);
+        } catch (SQLException e) {
+            throw new AuditLogException("Cannot read the audit hash chain head: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Reads the chain head. An empty log starts the chain at GENESIS. If the newest row has no hash (written by
+     * legacy code before hashing existed), the chain continues from the newest hashed row and a warning is printed:
+     * Verify Integrity will report that unhashed row.
+     */
+    protected String readLatestRowHash(Connection conn) throws SQLException {
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT rowid, row_hash FROM audit_log ORDER BY rowid DESC LIMIT 1;")) {
+            if (!rs.next()) {
+                return "GENESIS";
+            }
+            String hash = rs.getString("row_hash");
+            if (hash != null && !hash.isBlank()) {
+                return hash;
+            }
+            System.err.println("AUDIT CHAIN WARNING: newest audit_log row #" + rs.getLong(1)
+                    + " has no row_hash (legacy unhashed entry); chaining from the newest hashed row.");
+        }
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT row_hash FROM audit_log WHERE row_hash IS NOT NULL AND row_hash <> '' ORDER BY rowid DESC LIMIT 1;")) {
+            return rs.next() ? rs.getString(1) : "GENESIS";
+        }
     }
 
     /**

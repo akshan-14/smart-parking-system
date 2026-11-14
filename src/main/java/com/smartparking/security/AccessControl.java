@@ -1,5 +1,6 @@
 package com.smartparking.security;
 
+import com.smartparking.exception.AuditLogException;
 import com.smartparking.exception.PasswordChangeRequiredException;
 import com.smartparking.model.enums.UserRole;
 import com.smartparking.model.user.User;
@@ -132,27 +133,33 @@ public final class AccessControl {
             String role = user != null ? user.getRole().name() : "NONE";
             Integer userId = user != null ? user.getUserId() : null;
 
-            // Log access denial to immutable audit log
-            AuditLogService.getInstance().logWithActor(
-                    userId,
-                    username,
-                    role,
-                    "ACCESS_DENIED",
-                    "SECURITY_RULE",
-                    permission.name(),
-                    null,
-                    null,
-                    requiresPasswordChange(user)
-                            ? "Attempt to perform action before mandatory password change: " + permission.name()
-                            : "Unauthorized attempt to perform action: " + permission.name(),
-                    "FAILURE"
-            );
+            SecurityException denial = requiresPasswordChange(user)
+                    ? new PasswordChangeRequiredException("Access Denied: password change required before ["
+                            + permission.name() + "].")
+                    : new SecurityException("Access Denied: Role [" + role + "] is not authorized for ["
+                            + permission.name() + "].");
 
-            if (requiresPasswordChange(user)) {
-                throw new PasswordChangeRequiredException("Access Denied: password change required before ["
-                        + permission.name() + "].");
+            // Log access denial to immutable audit log. The action is denied whether or not the entry can be
+            // written; a failed write is reported by AuditLogService and attached to the exception.
+            try {
+                AuditLogService.getInstance().logWithActor(
+                        userId,
+                        username,
+                        role,
+                        "ACCESS_DENIED",
+                        "SECURITY_RULE",
+                        permission.name(),
+                        null,
+                        null,
+                        requiresPasswordChange(user)
+                                ? "Attempt to perform action before mandatory password change: " + permission.name()
+                                : "Unauthorized attempt to perform action: " + permission.name(),
+                        "FAILURE"
+                );
+            } catch (AuditLogException auditFailure) {
+                denial.addSuppressed(auditFailure);
             }
-            throw new SecurityException("Access Denied: Role [" + role + "] is not authorized for [" + permission.name() + "].");
+            throw denial;
         }
     }
 

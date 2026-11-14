@@ -69,11 +69,19 @@ public class UserDao {
     }
 
     public int save(User user) {
+        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection()) {
+            return save(conn, user);
+        } catch (SQLException e) {
+            throw new RuntimeException("Error saving user: " + e.getMessage(), e);
+        }
+    }
+
+    /** Inserts the user on the caller's connection (and transaction); returns the new id. */
+    public int save(Connection conn, User user) throws SQLException {
         String sql = "INSERT INTO users (username, password_hash, salt, full_name, email, phone, role, " +
                 "shift_or_plate, active, failed_attempts, locked_until, created_at, last_login_at, force_password_change) " +
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
-        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+        try (PreparedStatement pstmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
             pstmt.setString(1, user.getUsername());
             pstmt.setString(2, user.getPasswordHash());
             pstmt.setString(3, user.getSalt() != null ? user.getSalt() : "");
@@ -130,51 +138,72 @@ public class UserDao {
     }
 
     public void updatePassword(int userId, String newHash) {
-        String sql = "UPDATE users SET password_hash = ?, force_password_change = 0 WHERE user_id = ?;";
-        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setString(1, newHash);
-            pstmt.setInt(2, userId);
-            pstmt.executeUpdate();
+        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection()) {
+            updatePassword(conn, userId, newHash);
         } catch (SQLException e) {
             throw new RuntimeException("Error updating password: " + e.getMessage(), e);
         }
     }
 
-    public void updateFailedAttempts(int userId, int failedAttempts, LocalDateTime lockedUntil) {
-        String sql = "UPDATE users SET failed_attempts = ?, locked_until = ? WHERE user_id = ?;";
-        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setInt(1, failedAttempts);
-            pstmt.setString(2, lockedUntil != null ? DateFormat.toDbString(lockedUntil) : null);
-            pstmt.setInt(3, userId);
+    /** Sets a new password hash and clears force_password_change, on the caller's connection. */
+    public void updatePassword(Connection conn, int userId, String newHash) throws SQLException {
+        String sql = "UPDATE users SET password_hash = ?, force_password_change = 0 WHERE user_id = ?;";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, newHash);
+            pstmt.setInt(2, userId);
             pstmt.executeUpdate();
+        }
+    }
+
+    public void updateFailedAttempts(int userId, int failedAttempts, LocalDateTime lockedUntil) {
+        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection()) {
+            updateFailedAttempts(conn, userId, failedAttempts, lockedUntil);
         } catch (SQLException e) {
             throw new RuntimeException("Error updating failed attempts: " + e.getMessage(), e);
         }
     }
 
-    public void updateLastLogin(int userId, LocalDateTime loginTime) {
-        String sql = "UPDATE users SET last_login_at = ?, failed_attempts = 0, locked_until = NULL WHERE user_id = ?;";
-        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setString(1, DateFormat.toDbString(loginTime));
-            pstmt.setInt(2, userId);
+    public void updateFailedAttempts(Connection conn, int userId, int failedAttempts, LocalDateTime lockedUntil) throws SQLException {
+        String sql = "UPDATE users SET failed_attempts = ?, locked_until = ? WHERE user_id = ?;";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setInt(1, failedAttempts);
+            pstmt.setString(2, lockedUntil != null ? DateFormat.toDbString(lockedUntil) : null);
+            pstmt.setInt(3, userId);
             pstmt.executeUpdate();
+        }
+    }
+
+    public void updateLastLogin(int userId, LocalDateTime loginTime) {
+        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection()) {
+            updateLastLogin(conn, userId, loginTime);
         } catch (SQLException e) {
             throw new RuntimeException("Error updating last login: " + e.getMessage(), e);
         }
     }
 
+    public void updateLastLogin(Connection conn, int userId, LocalDateTime loginTime) throws SQLException {
+        String sql = "UPDATE users SET last_login_at = ?, failed_attempts = 0, locked_until = NULL WHERE user_id = ?;";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, DateFormat.toDbString(loginTime));
+            pstmt.setInt(2, userId);
+            pstmt.executeUpdate();
+        }
+    }
+
     public void setActiveStatus(int userId, boolean active) {
+        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection()) {
+            setActiveStatus(conn, userId, active);
+        } catch (SQLException e) {
+            throw new RuntimeException("Error updating user active status: " + e.getMessage(), e);
+        }
+    }
+
+    public void setActiveStatus(Connection conn, int userId, boolean active) throws SQLException {
         String sql = "UPDATE users SET active = ? WHERE user_id = ?;";
-        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setInt(1, active ? 1 : 0);
             pstmt.setInt(2, userId);
             pstmt.executeUpdate();
-        } catch (SQLException e) {
-            throw new RuntimeException("Error updating user active status: " + e.getMessage(), e);
         }
     }
 

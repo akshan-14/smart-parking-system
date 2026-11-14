@@ -1,6 +1,7 @@
 package com.smartparking.service;
 
 import com.smartparking.exception.AccountLockedException;
+import com.smartparking.exception.AuditLogException;
 import com.smartparking.exception.AuthException;
 import com.smartparking.model.enums.UserRole;
 import com.smartparking.model.user.Admin;
@@ -8,6 +9,7 @@ import com.smartparking.model.user.Attendant;
 import com.smartparking.model.user.Customer;
 import com.smartparking.model.user.User;
 import com.smartparking.repository.SystemSettingsDao;
+import com.smartparking.repository.SqliteTransaction;
 import com.smartparking.repository.UserDao;
 import com.smartparking.security.AccessControl;
 import com.smartparking.security.PasswordHasher;
@@ -53,28 +55,29 @@ public class AuthService {
         Optional<User> userOpt = userDao.findByUsername(trimmedUser);
 
         if (userOpt.isEmpty()) {
-            auditLogService.logWithActor(null, trimmedUser, "ANONYMOUS", "LOGIN_FAILURE",
-                    "USER", trimmedUser, null, null, "User not found", "FAILURE");
-            throw new AuthException("Invalid username or password.");
+            throw auditedRejection(new AuthException("Invalid username or password."),
+                    () -> auditLogService.logWithActor(null, trimmedUser, "ANONYMOUS", "LOGIN_FAILURE",
+                            "USER", trimmedUser, null, null, "User not found", "FAILURE"));
         }
 
         User user = userOpt.get();
 
         if (!user.isActive()) {
-            auditLogService.logWithActor(user.getUserId(), user.getUsername(), user.getRole().name(),
-                    "LOGIN_BLOCKED", "USER", String.valueOf(user.getUserId()), null, null,
-                    "Inactive account login attempted", "FAILURE");
-            throw new AuthException("Account is disabled. Please contact administrator.");
+            throw auditedRejection(new AuthException("Account is disabled. Please contact administrator."),
+                    () -> auditLogService.logWithActor(user.getUserId(), user.getUsername(), user.getRole().name(),
+                            "LOGIN_BLOCKED", "USER", String.valueOf(user.getUserId()), null, null,
+                            "Inactive account login attempted", "FAILURE"));
         }
 
         // Check Lockout
         if (user.getLockedUntil() != null) {
             if (LocalDateTime.now().isBefore(user.getLockedUntil())) {
                 String timeIST = DateFormat.formatISTTime(user.getLockedUntil());
-                auditLogService.logWithActor(user.getUserId(), user.getUsername(), user.getRole().name(),
-                        "LOGIN_BLOCKED_LOCKED", "USER", String.valueOf(user.getUserId()), null, null,
-                        "Login attempt during lockout until " + timeIST, "FAILURE");
-                throw new AccountLockedException("Account locked. Try again after " + timeIST + " IST", user.getLockedUntil());
+                throw auditedRejection(
+                        new AccountLockedException("Account locked. Try again after " + timeIST + " IST", user.getLockedUntil()),
+                        () -> auditLogService.logWithActor(user.getUserId(), user.getUsername(), user.getRole().name(),
+                                "LOGIN_BLOCKED_LOCKED", "USER", String.valueOf(user.getUserId()), null, null,
+                                "Login attempt during lockout until " + timeIST, "FAILURE"));
             } else {
                 // Lockout expired: reset failed attempts
                 userDao.updateFailedAttempts(user.getUserId(), 0, null);
@@ -89,19 +92,22 @@ public class AuthService {
         boolean passwordMatch = PasswordHasher.verify(plainPassword, user.getSalt(), user.getPasswordHash());
 
         if (passwordMatch) {
-            // Reset failed counter and update last login
+            // Reset failed counter, update last login and record LOGIN_SUCCESS atomically. If the audit entry
+            // cannot be written, the whole sign-in is rolled back and refused (fail closed): no session starts.
             LocalDateTime now = LocalDateTime.now();
-            userDao.updateLastLogin(user.getUserId(), now);
+            SqliteTransaction.immediate(conn -> {
+                userDao.updateLastLogin(conn, user.getUserId(), now);
+                auditLogService.recordInTransaction(conn, user.getUserId(), user.getUsername(), user.getRole().name(),
+                        "LOGIN_SUCCESS", "USER", String.valueOf(user.getUserId()), null, null,
+                        "User logged in successfully", "SUCCESS");
+                return null;
+            });
             user.setFailedAttempts(0);
             user.setLockedUntil(null);
             user.setLastLoginAt(now);
 
             int sessionTimeout = settingsDao.getInt("auth.session_timeout_minutes", 15);
             UserSession.getInstance().startSession(user, sessionTimeout);
-
-            auditLogService.logWithActor(user.getUserId(), user.getUsername(), user.getRole().name(),
-                    "LOGIN_SUCCESS", "USER", String.valueOf(user.getUserId()), null, null,
-                    "User logged in successfully", "SUCCESS");
 
             return Optional.of(user);
         } else {
@@ -111,25 +117,53 @@ public class AuthService {
             int currentFailures = user.getFailedAttempts() + 1;
             LocalDateTime lockedUntil = null;
 
+            String action;
+            String reason;
+            RuntimeException rejection;
             if (currentFailures >= maxAttempts) {
                 lockedUntil = LocalDateTime.now().plusMinutes(lockoutMins);
-                userDao.updateFailedAttempts(user.getUserId(), currentFailures, lockedUntil);
                 String timeIST = DateFormat.formatISTTime(lockedUntil);
-
-                auditLogService.logWithActor(user.getUserId(), user.getUsername(), user.getRole().name(),
-                        "ACCOUNT_LOCKOUT", "USER", String.valueOf(user.getUserId()),
-                        null, null, "Account locked after " + currentFailures + " failures until " + timeIST, "FAILURE");
-
-                throw new AccountLockedException("Account locked. Try again after " + timeIST + " IST", lockedUntil);
+                action = "ACCOUNT_LOCKOUT";
+                reason = "Account locked after " + currentFailures + " failures until " + timeIST;
+                rejection = new AccountLockedException("Account locked. Try again after " + timeIST + " IST", lockedUntil);
             } else {
-                userDao.updateFailedAttempts(user.getUserId(), currentFailures, null);
-                auditLogService.logWithActor(user.getUserId(), user.getUsername(), user.getRole().name(),
-                        "LOGIN_FAILURE", "USER", String.valueOf(user.getUserId()),
-                        null, null, "Failed attempt #" + currentFailures, "FAILURE");
-
-                throw new AuthException("Invalid username or password.");
+                action = "LOGIN_FAILURE";
+                reason = "Failed attempt #" + currentFailures;
+                rejection = new AuthException("Invalid username or password.");
             }
+
+            // Counter/lockout update and its audit entry are committed together.
+            final LocalDateTime lockValue = lockedUntil;
+            try {
+                SqliteTransaction.immediate(conn -> {
+                    userDao.updateFailedAttempts(conn, user.getUserId(), currentFailures, lockValue);
+                    auditLogService.recordInTransaction(conn, user.getUserId(), user.getUsername(), user.getRole().name(),
+                            action, "USER", String.valueOf(user.getUserId()), null, null, reason, "FAILURE");
+                    return null;
+                });
+            } catch (AuditLogException auditFailure) {
+                // The audit entry could not be written (already reported). An audit outage must never weaken
+                // brute-force protection, so the counter/lockout is still applied on its own; the sign-in is
+                // rejected either way.
+                userDao.updateFailedAttempts(user.getUserId(), currentFailures, lockValue);
+                rejection.addSuppressed(auditFailure);
+            }
+            throw rejection;
         }
+    }
+
+    /**
+     * Writes the audit entry for a rejected sign-in and returns the rejection to throw. The sign-in is rejected
+     * whether or not the entry could be written; a failed write is reported by AuditLogService and attached to the
+     * rejection, never silently dropped.
+     */
+    private RuntimeException auditedRejection(RuntimeException rejection, Runnable audit) {
+        try {
+            audit.run();
+        } catch (AuditLogException auditFailure) {
+            rejection.addSuppressed(auditFailure);
+        }
+        return rejection;
     }
 
     /**
@@ -158,11 +192,15 @@ public class AuthService {
 
         InputValidator.validatePassword(newPassword);
         String newHash = PasswordHasher.hash(newPassword);
-        userDao.updatePassword(userId, newHash);
 
-        auditLogService.logWithActor(userId, user.getUsername(), user.getRole().name(),
-                "PASSWORD_CHANGE", "USER", String.valueOf(userId), null, null,
-                "Password changed successfully", "SUCCESS");
+        // Password update and PASSWORD_CHANGE entry commit together, or neither does.
+        SqliteTransaction.immediate(conn -> {
+            userDao.updatePassword(conn, userId, newHash);
+            auditLogService.recordInTransaction(conn, userId, user.getUsername(), user.getRole().name(),
+                    "PASSWORD_CHANGE", "USER", String.valueOf(userId), null, null,
+                    "Password changed successfully", "SUCCESS");
+            return null;
+        });
     }
 
     /**
@@ -197,10 +235,13 @@ public class AuthService {
 
         InputValidator.validatePassword(newPassword);
         String newHash = PasswordHasher.hash(newPassword);
-        userDao.updatePassword(targetUserId, newHash);
 
-        auditLogService.log("PASSWORD_RESET", "USER", String.valueOf(targetUserId),
-                null, null, "Admin reset password for user: " + target.getUsername(), "SUCCESS");
+        SqliteTransaction.immediate(conn -> {
+            userDao.updatePassword(conn, targetUserId, newHash);
+            auditLogService.recordInTransactionAsSessionUser(conn, "PASSWORD_RESET", "USER", String.valueOf(targetUserId),
+                    null, null, "Admin reset password for user: " + target.getUsername(), "SUCCESS");
+            return null;
+        });
     }
 
     /**
@@ -225,14 +266,17 @@ public class AuthService {
         Customer customer = new Customer(0, username.toLowerCase(), hash, "", fullName.trim(),
                 null, mobile.trim(), null, true, 0, null, LocalDateTime.now(), null, false);
 
-        int newId = userDao.save(customer);
+        // Account and USER_REGISTERED entry commit together, or neither does.
+        int newId = SqliteTransaction.immediate(conn -> {
+            int id = userDao.save(conn, customer);
+            auditLogService.recordInTransaction(conn, id, username.toLowerCase(), "CUSTOMER",
+                    "USER_REGISTERED", "USER", String.valueOf(id),
+                    null, null, "Customer self-registered with DPDP consent", "SUCCESS");
+            return id;
+        });
 
-        // Record DPDP Consent
+        // Record DPDP Consent (separate service/connection, so it runs after the commit above)
         ConsentService.getInstance().recordConsent(username.toLowerCase(), "REGISTRATION", "v1.0 (DPDP 2023)");
-
-        auditLogService.logWithActor(newId, username.toLowerCase(), "CUSTOMER",
-                "USER_REGISTERED", "USER", String.valueOf(newId),
-                null, null, "Customer self-registered with DPDP consent", "SUCCESS");
 
         return userDao.findById(newId).orElse(customer);
     }
@@ -265,10 +309,12 @@ public class AuthService {
                     true, 0, null, LocalDateTime.now(), null, false);
         };
 
-        int id = userDao.save(user);
-
-        auditLogService.log("USER_CREATED", "USER", String.valueOf(id),
-                null, null, "Admin created user: " + username + " with role: " + role, "SUCCESS");
+        int id = SqliteTransaction.immediate(conn -> {
+            int newId = userDao.save(conn, user);
+            auditLogService.recordInTransactionAsSessionUser(conn, "USER_CREATED", "USER", String.valueOf(newId),
+                    null, null, "Admin created user: " + username + " with role: " + role, "SUCCESS");
+            return newId;
+        });
 
         return userDao.findById(id).orElse(user);
     }
@@ -279,10 +325,12 @@ public class AuthService {
     public void adminDeactivateUser(int userId) {
         AccessControl.checkPermission(Permission.MANAGE_USERS);
         User target = userDao.findById(userId).orElseThrow(() -> new IllegalArgumentException("User not found"));
-        userDao.setActiveStatus(userId, false);
-
-        auditLogService.log("USER_DEACTIVATED", "USER", String.valueOf(userId),
-                "active=1", "active=0", "Admin deactivated user: " + target.getUsername(), "SUCCESS");
+        SqliteTransaction.immediate(conn -> {
+            userDao.setActiveStatus(conn, userId, false);
+            auditLogService.recordInTransactionAsSessionUser(conn, "USER_DEACTIVATED", "USER", String.valueOf(userId),
+                    "active=1", "active=0", "Admin deactivated user: " + target.getUsername(), "SUCCESS");
+            return null;
+        });
     }
 
     /**
@@ -291,9 +339,11 @@ public class AuthService {
     public void adminActivateUser(int userId) {
         AccessControl.checkPermission(Permission.MANAGE_USERS);
         User target = userDao.findById(userId).orElseThrow(() -> new IllegalArgumentException("User not found"));
-        userDao.setActiveStatus(userId, true);
-
-        auditLogService.log("USER_ACTIVATED", "USER", String.valueOf(userId),
-                "active=0", "active=1", "Admin reactivated user: " + target.getUsername(), "SUCCESS");
+        SqliteTransaction.immediate(conn -> {
+            userDao.setActiveStatus(conn, userId, true);
+            auditLogService.recordInTransactionAsSessionUser(conn, "USER_ACTIVATED", "USER", String.valueOf(userId),
+                    "active=0", "active=1", "Admin reactivated user: " + target.getUsername(), "SUCCESS");
+            return null;
+        });
     }
 }

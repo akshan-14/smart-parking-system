@@ -211,36 +211,25 @@ public class PaymentDao {
             throw new IllegalArgumentException("A valid refund reason (minimum 5 characters) is required.");
         }
         String updateSql = "UPDATE payments SET status = 'REFUNDED' WHERE payment_id = ? AND status = 'COMPLETED';";
-        String auditSql = "INSERT INTO audit_log (action, performed_by, ticket_id, old_value, new_value, reason, timestamp) " +
-                "VALUES ('PAYMENT_REFUND', ?, ?, 'COMPLETED', 'REFUNDED', ?, ?);";
+        String actor = adminUser != null ? adminUser : "admin";
 
-        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection()) {
-            conn.setAutoCommit(false);
-            try (PreparedStatement pu = conn.prepareStatement(updateSql);
-                 PreparedStatement pa = conn.prepareStatement(auditSql)) {
-
-                pu.setInt(1, paymentId);
-                int rows = pu.executeUpdate();
-                if (rows == 0) {
-                    conn.rollback();
-                    return false;
+        // Status change and its hash-chained PAYMENT_REFUND entry commit together, or neither does. (This used to
+        // insert an unhashed audit row directly, which broke the tamper-evident chain on every refund.)
+        try {
+            return SqliteTransaction.immediate(conn -> {
+                try (PreparedStatement pu = conn.prepareStatement(updateSql)) {
+                    pu.setInt(1, paymentId);
+                    if (pu.executeUpdate() == 0) {
+                        return false; // nothing changed; the empty transaction commits harmlessly
+                    }
                 }
-
-                pa.setString(1, adminUser != null ? adminUser : "admin");
-                pa.setString(2, "Payment #" + paymentId);
-                pa.setString(3, reason.trim());
-                pa.setString(4, LocalDateTime.now().format(FORMATTER));
-                pa.executeUpdate();
-
-                conn.commit();
+                new AuditLogDao().append(conn, null, actor, "ADMIN", "PAYMENT_REFUND", "TICKET",
+                        "Payment #" + paymentId, "COMPLETED", "REFUNDED", reason.trim(), "LOCAL", "SUCCESS");
                 return true;
-            } catch (SQLException ex) {
-                conn.rollback();
-                throw ex;
-            } finally {
-                conn.setAutoCommit(true);
-            }
-        } catch (SQLException e) {
+            });
+        } catch (com.smartparking.exception.AuditLogException e) {
+            throw e;
+        } catch (RuntimeException e) {
             throw new RuntimeException("Error refunding payment: " + e.getMessage(), e);
         }
     }
