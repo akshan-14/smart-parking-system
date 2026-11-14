@@ -15,18 +15,22 @@ import java.util.List;
 public class SettingsHistoryDao {
 
     public void recordChange(String key, String oldValue, String newValue, String changedBy) {
+        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection()) {
+            recordChange(conn, key, oldValue, newValue, changedBy);
+        } catch (SQLException e) {
+            throw new RuntimeException("Error recording settings history for " + key + ": " + e.getMessage(), e);
+        }
+    }
+
+    public void recordChange(Connection conn, String key, String oldValue, String newValue, String changedBy) throws SQLException {
         String sql = "INSERT INTO settings_history (setting_key, old_value, new_value, changed_by, changed_at) VALUES (?, ?, ?, ?, ?);";
-        String nowStr = DateFormat.toDbString(LocalDateTime.now());
-        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, key);
             ps.setString(2, oldValue != null ? oldValue : "");
             ps.setString(3, newValue);
             ps.setString(4, changedBy != null ? changedBy : "SYSTEM");
-            ps.setString(5, nowStr);
+            ps.setString(5, DateFormat.toDbString(LocalDateTime.now()));
             ps.executeUpdate();
-        } catch (SQLException e) {
-            throw new RuntimeException("Error recording settings history for " + key + ": " + e.getMessage(), e);
         }
     }
 

@@ -4,6 +4,7 @@ import com.smartparking.config.DatabaseConnectionManager;
 import com.smartparking.model.fastag.FastagAccount;
 import com.smartparking.repository.AuditLogDao;
 import com.smartparking.repository.FastagDao;
+import com.smartparking.repository.SqliteTransaction;
 import com.smartparking.security.AccessControl;
 import com.smartparking.security.Permission;
 import com.smartparking.security.UserSession;
@@ -88,24 +89,23 @@ public class FastagService {
         if (UserSession.getInstance().isAuthenticated()) {
             AccessControl.checkPermission(Permission.MANAGE_FASTAG);
         }
-        if (amount <= 0) {
+        if (!(amount > 0) || Double.isInfinite(amount)) {
             throw new IllegalArgumentException("Top-up amount must be greater than zero.");
         }
-        FastagAccount acc = fastagDao.findByTagId(tagId)
-                .orElseThrow(() -> new IllegalArgumentException("FASTag ID '" + tagId + "' not found."));
+        String note = (reason != null && !reason.isBlank()) ? reason : "Prepaid wallet recharge";
 
-        double oldBal = acc.getBalance();
-        double newBal = oldBal + amount;
-
-        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection()) {
-            fastagDao.updateBalance(conn, tagId, newBal);
-        } catch (SQLException e) {
-            throw new RuntimeException("Error topping up FASTag: " + e.getMessage(), e);
-        }
-
-        auditLogDao.logAction("FASTAG_TOPUP", adminUser, tagId,
-                MoneyFormat.format(oldBal), MoneyFormat.format(newBal),
-                (reason != null && !reason.isBlank()) ? reason : "Prepaid wallet recharge");
+        // Balance is read and written while holding the write lock, so concurrent top-ups/debits cannot lose an
+        // update, and the new balance commits together with its FASTAG_TOPUP entry.
+        SqliteTransaction.immediate(conn -> {
+            FastagAccount acc = fastagDao.findByTagId(conn, tagId)
+                    .orElseThrow(() -> new IllegalArgumentException("FASTag ID '" + tagId + "' not found."));
+            double oldBal = acc.getBalance();
+            double newBal = oldBal + amount;
+            fastagDao.updateBalance(conn, acc.getTagId(), newBal);
+            AuditLogService.getInstance().recordInTransactionAsActor(conn, adminUser, "FASTAG_TOPUP", "TICKET",
+                    acc.getTagId(), MoneyFormat.format(oldBal), MoneyFormat.format(newBal), note, "SUCCESS");
+            return null;
+        });
     }
 
     /**
@@ -118,16 +118,29 @@ public class FastagService {
         if (tagId == null || tagId.isBlank()) {
             throw new IllegalArgumentException("Tag ID cannot be empty.");
         }
+        if (!(initialBalance >= 0) || Double.isInfinite(initialBalance)) {
+            throw new IllegalArgumentException("Initial balance must be zero or more.");
+        }
         String normPlate = PlateUtil.normalize(plate);
         if (!PlateUtil.isValid(normPlate)) {
             throw new IllegalArgumentException("Invalid vehicle registration plate: " + plate);
         }
+        String normTag = tagId.trim().toUpperCase();
+        String note = (reason != null && !reason.isBlank()) ? reason : "Linked FASTag to plate";
 
-        FastagAccount account = new FastagAccount(tagId.trim().toUpperCase(), normPlate, initialBalance, "ACTIVE", null, null);
-        fastagDao.save(account);
-
-        auditLogDao.logAction("FASTAG_LINK", adminUser, tagId, null, normPlate,
-                (reason != null && !reason.isBlank()) ? reason : "Linked FASTag to plate");
+        FastagAccount account = new FastagAccount(normTag, normPlate, initialBalance, "ACTIVE", null, null);
+        SqliteTransaction.immediate(conn -> {
+            // Linking an existing tag overwrites its plate, balance and status, so record what was replaced.
+            String previous = fastagDao.findByTagId(conn, normTag)
+                    .map(a -> "plate=" + a.getLicensePlate() + ", balance=" + MoneyFormat.format(a.getBalance())
+                            + ", status=" + a.getStatus())
+                    .orElse(null);
+            fastagDao.save(conn, account);
+            AuditLogService.getInstance().recordInTransactionAsActor(conn, adminUser, "FASTAG_LINK", "TICKET", normTag,
+                    previous, "plate=" + normPlate + ", balance=" + MoneyFormat.format(initialBalance) + ", status=ACTIVE",
+                    note, "SUCCESS");
+            return null;
+        });
     }
 
     public void linkTag(String tagId, String plate, double initialBalance, String adminUser) {
@@ -141,14 +154,20 @@ public class FastagService {
         if (UserSession.getInstance().isAuthenticated()) {
             AccessControl.checkPermission(Permission.MANAGE_FASTAG);
         }
-        FastagAccount acc = fastagDao.findByTagId(tagId)
-                .orElseThrow(() -> new IllegalArgumentException("FASTag ID '" + tagId + "' not found."));
+        if (newStatus == null || !java.util.Set.of("ACTIVE", "BLOCKED", "SUSPENDED").contains(newStatus.trim().toUpperCase())) {
+            throw new IllegalArgumentException("Invalid FASTag status: " + newStatus);
+        }
+        String status = newStatus.trim().toUpperCase();
+        String note = (reason != null && !reason.isBlank()) ? reason : "Status updated by administrator";
 
-        String oldStatus = acc.getStatus();
-        fastagDao.updateStatus(tagId, newStatus);
-
-        auditLogDao.logAction("FASTAG_STATUS_CHANGE", adminUser, tagId, oldStatus, newStatus.toUpperCase(),
-                (reason != null && !reason.isBlank()) ? reason : "Status updated by administrator");
+        SqliteTransaction.immediate(conn -> {
+            FastagAccount acc = fastagDao.findByTagId(conn, tagId)
+                    .orElseThrow(() -> new IllegalArgumentException("FASTag ID '" + tagId + "' not found."));
+            fastagDao.updateStatus(conn, acc.getTagId(), status);
+            AuditLogService.getInstance().recordInTransactionAsActor(conn, adminUser, "FASTAG_STATUS_CHANGE", "TICKET",
+                    acc.getTagId(), acc.getStatus(), status, note, "SUCCESS");
+            return null;
+        });
     }
 
     public void updateStatus(String tagId, String newStatus, String adminUser, String reason) {

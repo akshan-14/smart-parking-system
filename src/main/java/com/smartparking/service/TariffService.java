@@ -7,6 +7,7 @@ import com.smartparking.model.tariff.FeeBreakdown;
 import com.smartparking.model.tariff.TariffRate;
 import com.smartparking.model.ticket.ParkingTicket;
 import com.smartparking.repository.AuditLogDao;
+import com.smartparking.repository.SqliteTransaction;
 import com.smartparking.repository.SystemSettingsDao;
 import com.smartparking.repository.TariffDao;
 import com.smartparking.security.AccessControl;
@@ -214,10 +215,16 @@ public class TariffService {
         if (UserSession.getInstance().isAuthenticated()) {
             AccessControl.checkPermission(Permission.UPDATE_TARIFFS);
         }
-        settingsDao.saveOrUpdate("peak_multiplier", String.valueOf(multiplier), "Peak Multiplier");
-        settingsDao.saveOrUpdate("peak_enabled", String.valueOf(enabled), "Peak Enabled");
-        AuditLogService.getInstance().log("TARIFF_UPDATED", "SETTINGS", "PEAK_SETTINGS",
-                null, "multiplier=" + multiplier + ", enabled=" + enabled, "Admin updated peak multiplier settings", "SUCCESS");
+        // Both settings and the TARIFF_UPDATED entry commit together, or none does.
+        SqliteTransaction.immediate(conn -> {
+            String old = "multiplier=" + settingsDao.get(conn, "peak_multiplier").orElse("unset")
+                    + ", enabled=" + settingsDao.get(conn, "peak_enabled").orElse("unset");
+            settingsDao.set(conn, "peak_multiplier", String.valueOf(multiplier), "Peak Multiplier");
+            settingsDao.set(conn, "peak_enabled", String.valueOf(enabled), "Peak Enabled");
+            AuditLogService.getInstance().recordInTransactionAsSessionUser(conn, "TARIFF_UPDATED", "SETTINGS", "PEAK_SETTINGS",
+                    old, "multiplier=" + multiplier + ", enabled=" + enabled, "Admin updated peak multiplier settings", "SUCCESS");
+            return null;
+        });
     }
 
     public double getPeakMultiplier(double occupancyPercentage) {

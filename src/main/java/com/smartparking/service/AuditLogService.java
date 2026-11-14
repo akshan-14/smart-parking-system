@@ -146,6 +146,23 @@ public class AuditLogService {
                 action, entityType, entityId, oldValue, newValue, reason, result);
     }
 
+    /**
+     * As {@link #recordInTransaction}, attributed to the signed-in user. Only for in-process calls without a session
+     * (system jobs, tests) is the given fallback name used, with role SYSTEM, so a caller-supplied name can never
+     * replace the real user.
+     */
+    public void recordInTransactionAsActor(Connection conn, String fallbackUsername, String action, String entityType,
+                                           String entityId, String oldValue, String newValue, String reason, String result) {
+        User user = UserSession.getInstance().getCurrentUser().orElse(null);
+        if (user != null) {
+            recordInTransaction(conn, user.getUserId(), user.getUsername(), user.getRole().name(), action, entityType,
+                    entityId, oldValue, newValue, reason, result);
+        } else {
+            recordInTransaction(conn, null, fallbackUsername != null ? fallbackUsername : "SYSTEM", "SYSTEM", action,
+                    entityType, entityId, oldValue, newValue, reason, result);
+        }
+    }
+
     /** Makes a failed audit write visible: stderr, counters and registered listeners (e.g. an admin alert). */
     public void reportFailure(String action, Throwable error, boolean continued) {
         String message = error.getMessage();

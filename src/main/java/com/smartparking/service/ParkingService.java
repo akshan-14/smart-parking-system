@@ -22,6 +22,7 @@ import com.smartparking.patterns.observer.SmsNotificationListener;
 import com.smartparking.patterns.strategy.allocation.NearestFirstAllocationStrategy;
 import com.smartparking.patterns.strategy.allocation.SlotAllocationStrategy;
 import com.smartparking.repository.PaymentDao;
+import com.smartparking.repository.SqliteTransaction;
 import com.smartparking.repository.ParkingSlotDao;
 import com.smartparking.repository.ReservationDao;
 import com.smartparking.repository.TicketDao;
@@ -429,15 +430,25 @@ public class ParkingService {
         return paymentDao;
     }
 
+    /**
+     * Refunds a completed payment. The status change and its REFUND_PAYMENT audit entry, attributed to the signed-in
+     * user, commit in one transaction; {@code adminUser} is used only for session-less in-process calls.
+     */
     public boolean refundPayment(int paymentId, String reason, String adminUser) {
         if (UserSession.getInstance().isAuthenticated()) {
             AccessControl.checkPermission(Permission.REFUND_PAYMENT);
         }
-        boolean res = paymentDao.refund(paymentId, reason, adminUser);
-        if (res) {
-            AuditLogService.getInstance().log("REFUND_PAYMENT", "PAYMENT", String.valueOf(paymentId),
-                    "COMPLETED", "REFUNDED", reason, "SUCCESS");
+        if (reason == null || reason.trim().length() < 5) {
+            throw new IllegalArgumentException("A valid refund reason (minimum 5 characters) is required.");
         }
-        return res;
+        String trimmedReason = reason.trim();
+        return SqliteTransaction.immediate(conn -> {
+            if (!paymentDao.markRefunded(conn, paymentId)) {
+                return false;
+            }
+            AuditLogService.getInstance().recordInTransactionAsActor(conn, adminUser, "REFUND_PAYMENT", "PAYMENT",
+                    String.valueOf(paymentId), "COMPLETED", "REFUNDED", trimmedReason, "SUCCESS");
+            return true;
+        });
     }
 }

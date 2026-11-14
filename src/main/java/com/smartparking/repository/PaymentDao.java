@@ -210,18 +210,13 @@ public class PaymentDao {
         if (reason == null || reason.trim().length() < 5) {
             throw new IllegalArgumentException("A valid refund reason (minimum 5 characters) is required.");
         }
-        String updateSql = "UPDATE payments SET status = 'REFUNDED' WHERE payment_id = ? AND status = 'COMPLETED';";
         String actor = adminUser != null ? adminUser : "admin";
 
-        // Status change and its hash-chained PAYMENT_REFUND entry commit together, or neither does. (This used to
-        // insert an unhashed audit row directly, which broke the tamper-evident chain on every refund.)
+        // Status change and its hash-chained PAYMENT_REFUND entry commit together, or neither does.
         try {
             return SqliteTransaction.immediate(conn -> {
-                try (PreparedStatement pu = conn.prepareStatement(updateSql)) {
-                    pu.setInt(1, paymentId);
-                    if (pu.executeUpdate() == 0) {
-                        return false; // nothing changed; the empty transaction commits harmlessly
-                    }
+                if (!markRefunded(conn, paymentId)) {
+                    return false; // nothing changed; the empty transaction commits harmlessly
                 }
                 new AuditLogDao().append(conn, null, actor, "ADMIN", "PAYMENT_REFUND", "TICKET",
                         "Payment #" + paymentId, "COMPLETED", "REFUNDED", reason.trim(), "LOCAL", "SUCCESS");
@@ -231,6 +226,15 @@ public class PaymentDao {
             throw e;
         } catch (RuntimeException e) {
             throw new RuntimeException("Error refunding payment: " + e.getMessage(), e);
+        }
+    }
+
+    /** COMPLETED -> REFUNDED on the caller's connection; false if the payment is not COMPLETED. */
+    public boolean markRefunded(Connection conn, int paymentId) throws SQLException {
+        try (PreparedStatement pu = conn.prepareStatement(
+                "UPDATE payments SET status = 'REFUNDED' WHERE payment_id = ? AND status = 'COMPLETED';")) {
+            pu.setInt(1, paymentId);
+            return pu.executeUpdate() > 0;
         }
     }
 

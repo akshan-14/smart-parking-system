@@ -4,6 +4,7 @@ import com.smartparking.model.enums.VehicleType;
 import com.smartparking.model.tariff.TariffRate;
 import com.smartparking.repository.SettingsHistoryDao;
 import com.smartparking.repository.SystemSettingsDao;
+import com.smartparking.repository.SqliteTransaction;
 import com.smartparking.repository.TariffDao;
 import com.smartparking.security.AccessControl;
 import com.smartparking.security.Permission;
@@ -118,20 +119,21 @@ public class SettingsService {
             AccessControl.checkPermission(Permission.UPDATE_TARIFFS);
         }
 
-        String oldValue = settingsDao.getString(key, "");
-        if (oldValue.equals(newValue)) {
-            return; // No change
-        }
-
-        settingsDao.set(key, newValue, description);
-
         String currentUser = UserSession.getInstance().getCurrentUser()
                 .map(u -> u.getUsername()).orElse("SYSTEM");
 
-        historyDao.recordChange(key, oldValue, newValue, currentUser);
-
-        auditLogService.log("SETTING_UPDATED", "SETTINGS", key,
-                oldValue, newValue, "Setting updated: " + description, "SUCCESS");
+        // New value, settings_history row and SETTING_UPDATED entry commit together, or none does.
+        SqliteTransaction.immediate(conn -> {
+            String oldValue = settingsDao.get(conn, key).orElse("");
+            if (oldValue.equals(newValue)) {
+                return null; // No change
+            }
+            settingsDao.set(conn, key, newValue, description);
+            historyDao.recordChange(conn, key, oldValue, newValue, currentUser);
+            auditLogService.recordInTransactionAsSessionUser(conn, "SETTING_UPDATED", "SETTINGS", key,
+                    oldValue, newValue, "Setting updated: " + description, "SUCCESS");
+            return null;
+        });
     }
 
     public synchronized void updateTariff(TariffRate rate) {
@@ -147,19 +149,20 @@ public class SettingsService {
         validatePositive(rate.getOvernightRate(), "Overnight rate");
         validatePositive(rate.getMonthlyPassRate(), "Monthly pass rate");
 
-        Optional<TariffRate> oldRateOpt = tariffDao.findByVehicleType(rate.getVehicleType());
-        String oldStr = oldRateOpt.map(TariffRate::toString).orElse("NONE");
         String newStr = rate.toString();
-
-        tariffDao.updateTariff(rate);
-
         String currentUser = UserSession.getInstance().getCurrentUser()
                 .map(u -> u.getUsername()).orElse("SYSTEM");
 
-        historyDao.recordChange("tariff." + rate.getVehicleType().name(), oldStr, newStr, currentUser);
-
-        auditLogService.log("TARIFF_UPDATED", "TARIFF", rate.getVehicleType().name(),
-                oldStr, newStr, "Admin updated vehicle tariff for " + rate.getVehicleType(), "SUCCESS");
+        // Tariff, settings_history row and TARIFF_UPDATED entry commit together, or none does.
+        SqliteTransaction.immediate(conn -> {
+            String oldStr = tariffDao.findByVehicleType(conn, rate.getVehicleType())
+                    .map(TariffRate::toString).orElse("NONE");
+            tariffDao.updateTariff(conn, rate);
+            historyDao.recordChange(conn, "tariff." + rate.getVehicleType().name(), oldStr, newStr, currentUser);
+            auditLogService.recordInTransactionAsSessionUser(conn, "TARIFF_UPDATED", "TARIFF", rate.getVehicleType().name(),
+                    oldStr, newStr, "Admin updated vehicle tariff for " + rate.getVehicleType(), "SUCCESS");
+            return null;
+        });
     }
 
     // --- Sample Fee Preview Calculation ---

@@ -56,16 +56,33 @@ public class SystemSettingsDao {
     }
 
     public void set(String key, String value, String description) {
+        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection()) {
+            set(conn, key, value, description);
+        } catch (SQLException e) {
+            throw new RuntimeException("Error updating setting " + key + ": " + e.getMessage(), e);
+        }
+    }
+
+    /** Upserts a setting on the caller's connection (and transaction). */
+    public void set(Connection conn, String key, String value, String description) throws SQLException {
         String sql = "INSERT INTO settings (setting_key, setting_value, description) VALUES (?, ?, ?) " +
                 "ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, description = excluded.description;";
-        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, key);
             pstmt.setString(2, value);
             pstmt.setString(3, description);
             pstmt.executeUpdate();
-        } catch (SQLException e) {
-            throw new RuntimeException("Error updating setting " + key + ": " + e.getMessage(), e);
+        }
+    }
+
+    /** Reads a setting on the caller's connection, so it is consistent with writes in the same transaction. */
+    public Optional<String> get(Connection conn, String key) throws SQLException {
+        if (key == null) return Optional.empty();
+        try (PreparedStatement pstmt = conn.prepareStatement("SELECT setting_value FROM settings WHERE setting_key = ?;")) {
+            pstmt.setString(1, key.trim());
+            try (ResultSet rs = pstmt.executeQuery()) {
+                return rs.next() ? Optional.ofNullable(rs.getString(1)) : Optional.empty();
+            }
         }
     }
 

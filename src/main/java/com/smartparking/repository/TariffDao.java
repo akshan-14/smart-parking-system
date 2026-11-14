@@ -31,6 +31,16 @@ public class TariffDao {
         return Optional.empty();
     }
 
+    /** Reads the tariff on the caller's connection (inside its transaction). */
+    public Optional<TariffRate> findByVehicleType(Connection conn, VehicleType type) throws SQLException {
+        try (PreparedStatement pstmt = conn.prepareStatement("SELECT * FROM tariffs WHERE vehicle_type = ?;")) {
+            pstmt.setString(1, type.name());
+            try (ResultSet rs = pstmt.executeQuery()) {
+                return rs.next() ? Optional.of(mapRowToTariff(rs)) : Optional.empty();
+            }
+        }
+    }
+
     public List<TariffRate> findAll() {
         List<TariffRate> list = new ArrayList<>();
         String sql = "SELECT * FROM tariffs ORDER BY daily_cap ASC;";
@@ -47,10 +57,17 @@ public class TariffDao {
     }
 
     public void updateTariff(TariffRate rate) {
+        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection()) {
+            updateTariff(conn, rate);
+        } catch (SQLException e) {
+            throw new RuntimeException("Error updating tariff: " + e.getMessage(), e);
+        }
+    }
+
+    public void updateTariff(Connection conn, TariffRate rate) throws SQLException {
         String sql = "INSERT OR REPLACE INTO tariffs (vehicle_type, first_hour, extra_hour, daily_cap, overnight_rate, monthly_pass_rate) " +
                 "VALUES (?, ?, ?, ?, ?, ?);";
-        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, rate.getVehicleType().name());
             ps.setDouble(2, rate.getFirstHourRate());
             ps.setDouble(3, rate.getExtraHourRate());
@@ -58,8 +75,6 @@ public class TariffDao {
             ps.setDouble(5, rate.getOvernightRate());
             ps.setDouble(6, rate.getMonthlyPassRate());
             ps.executeUpdate();
-        } catch (SQLException e) {
-            throw new RuntimeException("Error updating tariff: " + e.getMessage(), e);
         }
     }
 

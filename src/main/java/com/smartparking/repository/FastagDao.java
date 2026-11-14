@@ -38,20 +38,22 @@ public class FastagDao {
 
     public Optional<FastagAccount> findByTagId(String tagId) {
         if (tagId == null || tagId.isBlank()) return Optional.empty();
-        String sql = "SELECT * FROM fastag_accounts WHERE tag_id = ?;";
-
-        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, tagId.trim());
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    return Optional.of(mapRow(rs));
-                }
-            }
+        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection()) {
+            return findByTagId(conn, tagId);
         } catch (SQLException e) {
             throw new RuntimeException("Error querying FASTag by ID: " + e.getMessage(), e);
         }
-        return Optional.empty();
+    }
+
+    /** Reads the account on the caller's connection (inside its transaction). */
+    public Optional<FastagAccount> findByTagId(Connection conn, String tagId) throws SQLException {
+        if (tagId == null || tagId.isBlank()) return Optional.empty();
+        try (PreparedStatement ps = conn.prepareStatement("SELECT * FROM fastag_accounts WHERE tag_id = ?;")) {
+            ps.setString(1, tagId.trim());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? Optional.of(mapRow(rs)) : Optional.empty();
+            }
+        }
     }
 
     public List<FastagAccount> findAll() {
@@ -71,19 +73,23 @@ public class FastagDao {
     }
 
     public void save(FastagAccount acc) {
+        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection()) {
+            save(conn, acc);
+        } catch (SQLException e) {
+            throw new RuntimeException("Error saving FASTag account: " + e.getMessage(), e);
+        }
+    }
+
+    public void save(Connection conn, FastagAccount acc) throws SQLException {
         String sql = "INSERT INTO fastag_accounts (tag_id, plate, balance, status) VALUES (?, ?, ?, ?) " +
                 "ON CONFLICT(tag_id) DO UPDATE SET plate = excluded.plate, balance = excluded.balance, " +
                 "status = excluded.status, updated_at = CURRENT_TIMESTAMP;";
-
-        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, acc.getTagId());
             ps.setString(2, acc.getLicensePlate());
             ps.setDouble(3, acc.getBalance());
             ps.setString(4, acc.getStatus());
             ps.executeUpdate();
-        } catch (SQLException e) {
-            throw new RuntimeException("Error saving FASTag account: " + e.getMessage(), e);
         }
     }
 
@@ -97,14 +103,19 @@ public class FastagDao {
     }
 
     public void updateStatus(String tagId, String status) {
+        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection()) {
+            updateStatus(conn, tagId, status);
+        } catch (SQLException e) {
+            throw new RuntimeException("Error updating FASTag status: " + e.getMessage(), e);
+        }
+    }
+
+    public void updateStatus(Connection conn, String tagId, String status) throws SQLException {
         String sql = "UPDATE fastag_accounts SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE tag_id = ?;";
-        try (Connection conn = DatabaseConnectionManager.getInstance().getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, status.toUpperCase());
             ps.setString(2, tagId);
             ps.executeUpdate();
-        } catch (SQLException e) {
-            throw new RuntimeException("Error updating FASTag status: " + e.getMessage(), e);
         }
     }
 
